@@ -1,0 +1,21 @@
+{
+  "name": "project-buildlog",
+  "version": "1.0.0",
+  "description": "A live build log page for any project, with a \"Your tasks\" panel: tick tasks, answer decisions and message the orchestrator from the page, and read its replies there. Local status server (systemd user service), task CLI, measured progress bars, HMAC-signed T3 Code webhook, hourly heartbeat and end-to-end checks. Python standard library only.",
+  "author": {
+    "name": "tekierz"
+  },
+  "homepage": "https://github.com/tekierz/project-buildlog",
+  "repository": "https://github.com/tekierz/project-buildlog",
+  "license": "Apache-2.0",
+  "keywords": [
+    "build-log",
+    "status-page",
+    "dashboard",
+    "tasks",
+    "orchestrator",
+    "webhook",
+    "t3-code",
+    "systemd"
+  ]
+}

@@ -1,0 +1,18 @@
+# User service for the @@PROJECT@@ build log server. Installed by the project-buildlog skill:
+#   cp @@UNIT_IN_REPO@@ ~/.config/systemd/user/@@SERVICE@@.service
+#   systemctl --user daemon-reload && systemctl --user enable --now @@SERVICE@@.service
+[Unit]
+Description=Build log page and Your tasks API (@@PROJECT@@)
+Documentation=@@DOC_URL@@
+
+[Service]
+Type=simple
+WorkingDirectory=@@ROOT@@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@@PYTHON@@ -I @@SERVER_ABS@@ --config @@CONFIG_ABS@@ --state-dir @@STATE_ABS@@
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

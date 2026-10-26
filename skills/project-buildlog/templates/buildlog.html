@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@@PROJECT@@ build log</title>
+<!--
+  Build log for @@PROJECT@@. Kept up to date by a helper agent.
+  Editing rules (for the helper):
+  - Keep the structure and every START/END marker comment (UPDATED, TASKS,
+    TASKS-SNAPSHOT, CURRENT, GOALS, CARDS, MODULES, TIMELINE). Never write
+    comment syntax inside this comment, not even as an example: the first
+    end-of-comment sequence closes it and the rest leaks onto the page.
+  - Update the UPDATED line (date, time, short commit hash), the cards, the
+    module table and the timeline in place. Add timeline entries at the TOP
+    of the timeline list (newest first), one li per notable change, in plain
+    words.
+  - Keep the TASKS section, its script and the panel CSS (between the
+    TASKS-CSS markers) exactly as they are. The user's tasks and the
+    orchestrator's replies live in @@TASKS_FILE@@ and change only through
+    @@TASKS_CLI@@ (list, add, done, reopen, reply), which also refreshes
+    the snapshot inside the TASKS section.
+  - Card progress bars come from @@PROGRESS@@ run with its write flag. Do not
+    edit them by hand. Each card links its status list with an anchor of
+    class status-src.
+  - Status words: a check mark only when it was shown on the main branch and
+    the evidence file is in git. Otherwise say "partly shown" or "not yet
+    checked", and say how it was reached (scripted, headless, one run).
+  - The page reloads itself in open browsers (served by @@SERVER@@), so
+    write the file in one go and never leave it half-edited. Never add a meta
+    refresh tag: it reloads the page and wipes what the user is typing.
+  - Screenshots live in @@MEDIA_DIR@@ (gitignored). Reference them relatively.
+-->
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c232d; --line: #2a323d;
+    --text: #e6edf3; --muted: #8b98a8; --accent: #e8b14a; --good: #5cc98b;
+    --warn: #e5a54b; --bad: #e5616b; --info: #6aa9ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 64px; }
+  header { display: flex; justify-content: space-between; align-items: baseline;
+           gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line);
+           padding-bottom: 16px; margin-bottom: 24px; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: .5px; }
+  h1 span { color: var(--accent); }
+  h2 { font-size: 18px; margin: 36px 0 12px; color: var(--accent);
+       text-transform: uppercase; letter-spacing: 1.5px; }
+  .muted { color: var(--muted); }
+  .goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .goal { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .goal b { display: block; margin-bottom: 4px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+          display: flex; flex-direction: column; }
+  .card img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; display: block; }
+  .card .body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .card h3 { margin: 0; font-size: 17px; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px;
+         background: var(--panel2); border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
+  .stage { font-size: 13px; color: var(--muted); }
+  .card ul { margin: 0; padding-left: 18px; font-size: 14px; }
+  /* status cards: progress bars (markup written by the progress script), hover lift, shimmer */
+  .cards .card { transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease; }
+  @media (hover: hover) {
+    .cards .card:hover { transform: translateY(-3px); border-color: #3a4554; box-shadow: 0 12px 28px rgba(0, 0, 0, .4); }
+  }
+  .cards .prog { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .cards .prog-bar { flex: 1 0 100%; display: flex; height: 10px; border-radius: 99px; overflow: hidden;
+                     background: var(--panel2); box-shadow: inset 0 0 0 1px var(--line); }
+  .cards .prog-fill { display: flex; flex: 0 0 auto; width: var(--w); height: 100%; border-radius: 99px; overflow: hidden;
+                      animation: prog-grow 1s cubic-bezier(.22, .7, .2, 1) calc(.15s + var(--i, 0) * 60ms) backwards; }
+  .cards .prog-fill i { display: block; height: 100%; min-width: 4px; }
+  .cards .prog-fill .s { background: linear-gradient(180deg, rgba(255, 255, 255, .2), rgba(255, 255, 255, 0) 60%),
+                                     linear-gradient(90deg, #3aa26c, var(--good)); }
+  .cards .prog-fill .p { position: relative; overflow: hidden;
+                         background: linear-gradient(180deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, 0) 60%),
+                                     repeating-linear-gradient(135deg, var(--warn) 0 6px, #b97f2d 6px 12px); }
+  .cards .prog-fill .s + .p { box-shadow: inset 1px 0 0 rgba(14, 17, 22, .55); }
+  .cards .prog-fill .p::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+                                background: linear-gradient(100deg, transparent 35%, rgba(255, 255, 255, .42) 50%, transparent 65%);
+                                animation: prog-shimmer 3.4s ease-in-out 1.6s infinite; }
+  .cards a, .prog-note a { color: var(--info); }
+  .cards .prog-label { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cards .prog-label b { font-weight: 700; }
+  .cards .prog-label .n-s { color: var(--good); } .cards .prog-label .n-p { color: var(--warn); }
+  .cards .prog-how { margin-left: auto; font-size: 12px; color: var(--muted); text-decoration: underline dotted; text-underline-offset: 3px; }
+  .cards .prog-how:hover, .cards .prog-how:focus-visible { color: var(--text); }
+  .cards .prog-how::after { content: attr(data-tip); position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 5;
+                            padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+                            color: var(--text); font-size: 12.5px; line-height: 1.4; box-shadow: 0 8px 20px rgba(0, 0, 0, .45);
+                            opacity: 0; visibility: hidden; transform: translateY(-4px); pointer-events: none;
+                            transition: opacity .15s ease, transform .15s ease, visibility .15s; }
+  .cards .prog-how:hover::after, .cards .prog-how:focus-visible::after { opacity: 1; visibility: visible; transform: none; }
+  .prog-note { margin-top: 14px; font-size: 13px; }
+  @keyframes prog-grow { from { width: 0; } }
+  @keyframes prog-shimmer { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(100%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .cards .card { transition: none; }
+    .cards .card:hover { transform: none; }
+    .cards .prog-fill, .cards .prog-fill .p::after { animation: none; }
+    .cards .prog-how::after { transition: none; transform: none; }
+  }
+  .ok { color: var(--good); } .wip { color: var(--warn); } .blocked { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 14px; }
+  th { color: var(--muted); font-weight: 600; background: var(--panel2); }
+  ol.timeline { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--line); }
+  ol.timeline li { position: relative; padding: 0 0 14px 18px; }
+  ol.timeline li::before { content: ""; position: absolute; left: -6px; top: 7px; width: 10px; height: 10px;
+                           border-radius: 50%; background: var(--accent); }
+  ol.timeline time { color: var(--muted); font-size: 13px; margin-right: 8px; font-variant-numeric: tabular-nums; }
+  ol.timeline .who { font-size: 12px; color: var(--info); margin-right: 6px; }
+  /* TASKS-CSS:START  tasks panel: belongs to the build log server; the helper keeps it unchanged */
+  .tasks { margin: 0 0 8px; }
+  .tasks h2 { margin-top: 0; }
+  .tasks-hint { margin: 0 0 14px; font-size: 14px; }
+  .tasks a { color: var(--info); }
+  .tasks code { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 13px; }
+  .tasks-banner { background: var(--panel2); border: 1px solid var(--warn); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 14px; }
+  .task { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--info);
+          border-radius: 10px; padding: 12px 16px 14px; margin-bottom: 10px; }
+  .task.decision { border-left-color: var(--accent); }
+  .task.is-done { opacity: .62; }
+  .task-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .task-title { font-weight: 600; font-size: 16px; }
+  .kind { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 1px 9px; border-radius: 99px;
+          border: 1px solid currentColor; }
+  .kind.decision { color: var(--accent); } .kind.action { color: var(--info); }
+  .tag.new { color: var(--accent); border-color: var(--accent); }
+  .task-details { font-size: 14px; margin-top: 4px; }
+  .task-details p, .task-details ul { margin: 6px 0; }
+  .task-details ul { padding-left: 20px; }
+  details.how { margin: 8px 0 2px; font-size: 14px; }
+  details.how summary, .tasks-done summary { cursor: pointer; color: var(--muted); }
+  .how-cmds { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+              margin: 8px 0; overflow-x: auto; font-size: 13px; line-height: 1.45; }
+  .task-ctl { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .check { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; align-self: flex-start; }
+  .check input { width: 20px; height: 20px; accent-color: var(--accent); margin: 0; cursor: pointer; }
+  .tasks textarea { width: 100%; min-height: 56px; resize: vertical; background: var(--bg); color: var(--text);
+                    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
+  .tasks textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  .task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+  .btn { background: var(--accent); color: #1a1405; border: 0; border-radius: 8px; padding: 7px 18px; font: inherit;
+         font-weight: 600; cursor: pointer; min-height: 36px; }
+  .btn.small { padding: 3px 12px; min-height: 0; font-size: 13px; }
+  .btn.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .st { font-size: 13px; color: var(--muted); }
+  .st-sent { color: var(--good); } .st-queued { color: var(--warn); } .st-failed { color: var(--bad); } .st-wait { color: var(--info); }
+  .tasks-done { margin: 12px 0 6px; }
+  .tasks-done > div { margin-top: 10px; }
+  .msgbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px 14px; margin-top: 16px; }
+  .msgbox h3 { margin: 0 0 8px; font-size: 16px; }
+  .msgbox .task-actions { margin-top: 8px; }
+  h1 .pill { font-size: 12px; letter-spacing: .5px; text-transform: uppercase; vertical-align: middle; cursor: pointer;
+             color: #1a1405; background: var(--accent); border-radius: 99px; padding: 2px 10px; margin-left: 6px; }
+  .task-details p, .reply-text p { white-space: pre-line; overflow-wrap: anywhere; }
+  .tag.new-reply { color: var(--good); border-color: var(--good); }
+  .tasks [hidden], h1 .pill[hidden] { display: none !important; }   /* .tag and .pill set their own display */
+  .replies:empty { display: none; }
+  .reply { background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--good);
+           border-radius: 8px; padding: 8px 12px 9px; margin: 8px 0 4px; font-size: 14px; }
+  .reply-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+  .reply .who, .you-msg .who { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--good); }
+  .you-msg .who { color: var(--muted); }
+  .reply time, .you-msg time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .reply-text p, .reply-text ul { margin: 4px 0 0; }
+  .reply-text ul { padding-left: 20px; }
+  .code-block { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0 0;
+                overflow-x: auto; font-size: 13px; }
+  .linklike { background: none; border: 0; padding: 2px 0; margin: 2px 0; color: var(--info); font: inherit; font-size: 13px;
+              cursor: pointer; text-decoration: underline; }
+  .lastnote { font-size: 13px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8em; overflow-y: auto; }
+  .lastnote[hidden] { display: none; }
+  .thread { margin-top: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .thread:empty { display: none; }
+  .thread > .reply, .thread > .you-msg { align-self: stretch; margin: 0; }
+  .you-msg { border-left: 3px solid var(--line); padding: 2px 12px 4px; font-size: 14px; }
+  .you-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  @media (max-width: 600px) {
+    main { padding: 20px 14px 48px; }
+    .task { padding: 12px 12px 14px; }
+    .btn { min-height: 44px; flex: 1 1 auto; }
+    .btn.small { min-height: 32px; flex: 0 0 auto; }
+    table { display: block; overflow-x: auto; }   /* keep the wide module table from widening the page */
+  }
+  /* TASKS-CSS:END */
+  footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1><span>@@PROJECT@@</span> build log</h1>
+  <!-- UPDATED:START -->
+  <div class="muted">Updated @@UPDATED@@</div>
+  <!-- UPDATED:END -->
+</header>
+
+<!-- TASKS:START -->
+<section id="tasks" class="tasks" data-live-url="@@LIVE_URL@@" data-ns="@@NS@@">
+  <h2>Your tasks</h2>
+  <p id="tasks-hint" class="tasks-hint muted">Loading your tasks…</p>
+  <div id="tasks-banner" class="tasks-banner" hidden>This page has a newer version. It reloads once you have sent or cleared what you typed. <button type="button" class="btn small" id="tasks-reload">Reload now</button></div>
+  <div id="tasks-open"></div>
+  <details id="tasks-done" class="tasks-done" hidden><summary>Done (<span id="tasks-done-n">0</span>) <span id="tasks-done-new" class="tag new-reply" hidden>new reply</span></summary><div id="tasks-done-list"></div></details>
+  <div id="msgbox" class="msgbox" hidden>
+    <h3>Message the orchestrator <span id="msg-new" class="tag new-reply" hidden>new reply</span></h3>
+    <textarea id="msg-text" rows="3" placeholder="Anything you want the orchestrator to know or do. It does not have to be about a task." aria-label="Message to the orchestrator"></textarea>
+    <div class="task-actions"><button type="button" class="btn" id="msg-send">Send</button><span id="msg-status" class="st" role="status"></span></div>
+    <div id="msg-thread" class="thread" aria-live="polite"></div>
+  </div>
+<!-- TASKS-SNAPSHOT:START -->
+<script type="application/json" id="tasks-snapshot">{"tasks":[]}</script>
+<!-- TASKS-SNAPSHOT:END -->
+<script>
+(function () {
+  'use strict';
+  var PAGE_TITLE = document.title, POLL_MS = 30000, SAVE_MS = 800;
+  var ROOT = document.getElementById('tasks');
+  var LIVE_URL = ROOT.getAttribute('data-live-url') || '';
+  var NS = (ROOT.getAttribute('data-ns') || 'buildlog') + '.';   // localStorage keys, one set per project
+
+  function $(id) { return document.getElementById(id); }
+  function store(key, val) {            // localStorage get (1 arg) / set / remove (null)
+    try {
+      if (arguments.length === 1) return window.localStorage.getItem(key);
+      if (val === null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, val);
+    } catch (e) { /* storage blocked: drafts just are not kept */ }
+    return null;
+  }
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag), k;
+    for (k in attrs || {}) {
+      if (k === 'class') n.className = attrs[k];
+      else if (k === 'text') n.textContent = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    }
+    (kids || []).forEach(function (c) { if (c) n.appendChild(c); });
+    return n;
+  }
+  function hhmm(iso) {
+    var d = iso ? new Date(iso) : new Date();
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  }
+  function newId() {                    // uuid4 as 32 hex characters
+    var b = new Uint8Array(16), i, s = '';
+    window.crypto.getRandomValues(b);
+    b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+    for (i = 0; i < 16; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16);
+    return s;
+  }
+  function api(method, path, body) {
+    var opts = {method: method, cache: 'no-store'};
+    if (method === 'POST') {
+      opts.headers = {'Content-Type': 'application/json', 'X-Buildlog': '1'};
+      opts.body = JSON.stringify(body || {});
+    }
+    return fetch('/api' + path, opts).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+        return j;
+      });
+    });
+  }
+  function why(e) { return e instanceof TypeError ? 'cannot reach the build log server' : e.message; }
+
+  /* Small text format for details and replies: blank line = new paragraph, lines
+     starting "- " = list, `x` = code, ``` fences = code block, http(s) links are
+     clickable. Built with textContent only. */
+  function rich(text, cls) {
+    var box = el('div', {class: cls});
+    String(text || '').split(/```[^\n`]*\n?([\s\S]*?)```/).forEach(function (part, i) {
+      if (i % 2) { box.appendChild(el('pre', {class: 'code-block', text: part.replace(/\n$/, '')})); return; }
+      part.split(/\n{2,}/).forEach(function (para) {
+        var lines = para.split('\n').filter(function (l) { return l.trim(); }), host;
+        if (!lines.length) return;
+        if (lines.every(function (l) { return /^\s*- /.test(l); })) {
+          host = el('ul');
+          lines.forEach(function (l) { host.appendChild(inline(el('li'), l.replace(/^\s*- /, ''))); });
+        } else {
+          host = inline(el('p'), lines.join('\n'));
+        }
+        box.appendChild(host);
+      });
+    });
+    return box;
+  }
+  function inline(node, text) {
+    text.split(/(`[^`]+`|https?:\/\/[^\s<>"'`]+)/).forEach(function (part) {
+      if (!part) return;
+      if (part.length > 2 && part.charAt(0) === '`' && part.charAt(part.length - 1) === '`') {
+        node.appendChild(el('code', {text: part.slice(1, -1)}));
+      } else if (/^https?:\/\//.test(part)) {
+        var m = part.match(/[.,;:!?)\]]+$/), tail = m ? m[0] : '', url = tail ? part.slice(0, -tail.length) : part;
+        node.appendChild(el('a', {href: url, text: url, target: '_blank', rel: 'noopener'}));
+        if (tail) node.appendChild(document.createTextNode(tail));
+      } else {
+        node.appendChild(document.createTextNode(part));
+      }
+    });
+    return node;
+  }
+  function copyText(text, pre) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    var r = document.createRange(); r.selectNodeContents(pre);
+    var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+    return document.execCommand('copy') ? Promise.resolve() : Promise.reject(new Error('copy blocked'));
+  }
+
+  var snapshot = {tasks: []};
+  try { snapshot = JSON.parse($('tasks-snapshot').textContent); } catch (e) { /* empty list */ }
+  var S = {
+    live: false, pending: 0,
+    tasks: snapshot.tasks.map(function (t) { return {id: t.id, kind: t.kind, title: t.title, details: t.details, how: t.how, status: t.status, done: t.status === 'done', note: '', last_send: null, last_note: null, replies: t.replies || []}; }),
+    general: (snapshot.general_replies || []).map(function (r) { return {type: 'orchestrator', at: r.at, text: r.text}; })   // replaced by /api/messages when live
+  };
+  var sticky = {};     // ticked during this visit: stays in the open list until the next load
+  var saving = {};     // id -> saves in flight (server value must not overwrite the tick)
+  var status = {};     // id -> transient {cls, text} (sending / failed)
+  var inflight = {};   // key -> {sig, id}: a retry of the same text reuses the message id
+  var drafts = {};     // id -> note text being edited
+  var timers = {};
+  var unseen = {}, refs = {}, cards = {}, sig = '';
+  var seenReplies = {};   // task id -> time of the newest reply the person has seen
+  try { seenReplies = JSON.parse(store(NS + 'replies.seen')) || {}; } catch (e) { seenReplies = {}; }
+  var generalSeen = store(NS + 'general.seen') || '';
+  var earlier = {};       // task id (or '__general') -> true while the earlier replies are open
+  var THREAD_SHOWN = 6;
+  var pageMtime = null, pageChanged = false, offlineTicks = 0, firstRefresh = true, everLive = false, stale = false;
+  var pendingScroll = null;
+  try { pendingScroll = window.sessionStorage.getItem(NS + 'scroll'); window.sessionStorage.removeItem(NS + 'scroll'); } catch (e) { /* ignore */ }
+
+  function task(id) { return S.tasks.filter(function (t) { return t.id === id; })[0]; }
+  function isDone(t) { return t.done && !sticky[t.id]; }
+  function draftKey(id) { return NS + 'draft.' + id; }
+  function getDraft(t) {
+    if (drafts[t.id] === undefined) { var d = store(draftKey(t.id)); drafts[t.id] = d !== null ? d : (t.note || ''); }
+    return drafts[t.id];
+  }
+  function unsentNote(t) {
+    var cur = getDraft(t).trim();
+    return cur !== '' && cur !== (((t.last_send || {}).note) || '').trim();
+  }
+  function isUnsent(t) {
+    var ls = t.last_send;
+    if (!ls) return getDraft(t).trim() !== '' || !!sticky[t.id];
+    return getDraft(t).trim() !== (ls.note || '').trim() || !!t.done !== (ls.done === 'true');
+  }
+  function stWord(s) {                  // delivery state of a sent message, in words
+    return {sent: 'delivered', local: 'saved for the orchestrator', read: 'read by the orchestrator'}[s] || 'waiting to be delivered';
+  }
+  function fromLast(t) {
+    var ls = t.last_send;
+    if (!ls) return null;
+    if (ls.status === 'sent') return {cls: 'st-sent', text: 'Sent ' + hhmm(ls.at)};
+    if (ls.status === 'local') return {cls: 'st-sent', text: 'Saved ' + hhmm(ls.at) + ' for the orchestrator'};
+    if (ls.status === 'read') return {cls: 'st-sent', text: 'Read by the orchestrator (sent ' + hhmm(ls.at) + ')'};
+    return {cls: 'st-queued', text: 'Queued ' + hhmm(ls.at) + ', waiting to be delivered'};
+  }
+
+  /* ---- orchestrator replies ---- */
+  function when(iso) {
+    var d = new Date(iso), now = new Date();
+    if (isNaN(d.getTime())) return '';
+    if (d.toDateString() === now.toDateString()) return hhmm(iso);
+    return d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + hhmm(iso);
+  }
+  function newestAt(list) { return list.length ? list[list.length - 1].at : ''; }
+  function hasNewReply(t) { var n = newestAt(t.replies || []); return n !== '' && n > (seenReplies[t.id] || ''); }
+  function generalNewest() {
+    var n = '';
+    S.general.forEach(function (m) { if (m.type === 'orchestrator' && m.at > n) n = m.at; });
+    return n;
+  }
+  function generalNew() { var n = generalNewest(); return n !== '' && n > generalSeen; }
+  function replyEl(r) {
+    return el('div', {class: 'reply'}, [
+      el('div', {class: 'reply-head'}, [el('span', {class: 'who', text: 'Orchestrator'}), el('time', {text: when(r.at)})]),
+      rich(r.text, 'reply-text')
+    ]);
+  }
+  function toggleBtn(text, onclick) {
+    var b = el('button', {type: 'button', class: 'linklike', text: text});
+    b.addEventListener('click', onclick);
+    return b;
+  }
+  /* Newest reply first. Rebuilds only the reply area of one card, never the note box. */
+  function drawReplies(t) {
+    var c = cards[t.id];
+    if (!c) return;
+    var reps = (t.replies || []).slice().reverse(), open = !!earlier[t.id];
+    c.tag.hidden = !hasNewReply(t);
+    var key = JSON.stringify([reps, open]);
+    if (c.sig === key) return;
+    c.sig = key;
+    var hadFocus = c.box.contains(document.activeElement), btn = null;
+    c.box.textContent = '';
+    if (!reps.length) return;
+    c.box.appendChild(replyEl(reps[0]));
+    if (reps.length > 1) {
+      btn = toggleBtn(open ? 'Hide earlier replies' : 'Show ' + (reps.length - 1) + ' earlier', function () {
+        earlier[t.id] = !earlier[t.id];
+        seeReplies(t.id);
+        drawReplies(task(t.id));
+      });
+      c.box.appendChild(btn);
+      if (open) reps.slice(1).forEach(function (r) { c.box.appendChild(replyEl(r)); });
+    }
+    if (hadFocus && btn) btn.focus();
+  }
+  function seeReplies(id) {             // the person opened or touched the card
+    var t = task(id);
+    if (!t || !hasNewReply(t)) return;
+    seenReplies[id] = newestAt(t.replies);
+    store(NS + 'replies.seen', JSON.stringify(seenReplies));
+    drawReplies(t); badge();
+  }
+  function seeGeneral() {
+    if (!generalNew()) return;
+    generalSeen = generalNewest();
+    store(NS + 'general.seen', generalSeen);
+    $('msg-new').hidden = true; badge();
+  }
+  function threadItem(m) {
+    if (m.type === 'orchestrator') return replyEl(m);
+    return el('div', {class: 'you-msg'}, [
+      el('div', {class: 'reply-head'}, [
+        el('span', {class: 'who you', text: 'You'}), el('time', {text: when(m.at)}),
+        el('span', {class: 'st ' + (m.status === 'queued' ? 'st-queued' : 'st-sent'), text: stWord(m.status)})
+      ]),
+      el('div', {class: 'you-text', text: m.text})
+    ]);
+  }
+  function renderThread() {
+    $('msgbox').hidden = !S.live;
+    $('msg-new').hidden = !generalNew();
+    var box = $('msg-thread'), items = S.general.slice().reverse(), open = !!earlier.__general;
+    var key = JSON.stringify([items, open]);
+    if (box.getAttribute('data-sig') === key) return;
+    box.setAttribute('data-sig', key);
+    box.textContent = '';
+    items.slice(0, open ? items.length : THREAD_SHOWN).forEach(function (m) { box.appendChild(threadItem(m)); });
+    if (items.length > THREAD_SHOWN) {
+      box.appendChild(toggleBtn(open ? 'Show fewer' : 'Show ' + (items.length - THREAD_SHOWN) + ' earlier', function () {
+        earlier.__general = !earlier.__general;
+        renderThread();
+      }));
+    }
+  }
+
+  /* ---- task cards ---- */
+  function howEl(t) {
+    var pre = el('pre', {class: 'how-cmds', text: t.how});
+    var btn = el('button', {type: 'button', class: 'btn small ghost', text: 'Copy'});
+    btn.addEventListener('click', function () {
+      copyText(t.how, pre).then(function () { btn.textContent = 'Copied'; }, function () { btn.textContent = 'Select and copy by hand'; });
+      setTimeout(function () { btn.textContent = 'Copy'; }, 2500);
+    });
+    return el('details', {class: 'how'}, [el('summary', {text: t.kind === 'decision' ? 'Commands that run if you approve' : 'How to do it'}), pre, btn]);
+  }
+  function taskEl(t) {
+    var tag = el('span', {class: 'tag new-reply', text: 'new reply'}), box = el('div', {class: 'replies'});
+    tag.hidden = !hasNewReply(t);
+    var node = el('div', {class: 'task ' + t.kind + (t.done ? ' is-done' : ''), 'data-id': t.id}, [
+      el('div', {class: 'task-head'}, [
+        el('span', {class: 'kind ' + t.kind, text: t.kind === 'decision' ? 'Decision' : 'Action'}),
+        el('span', {class: 'task-title', text: t.title}),
+        unseen[t.id] ? el('span', {class: 'tag new', text: 'new'}) : null,
+        tag
+      ])
+    ]);
+    if (t.details) node.appendChild(rich(t.details, 'task-details'));
+    if (t.how) node.appendChild(howEl(t));
+    node.appendChild(box);
+    cards[t.id] = {node: node, tag: tag, box: box, sig: ''};
+    node.addEventListener('pointerdown', function () { seeReplies(t.id); });
+    node.addEventListener('focusin', function () { seeReplies(t.id); });
+    if (S.live) node.appendChild(controls(t, node));
+    return node;
+  }
+  function controls(t, node) {
+    var id = t.id;
+    var cb = el('input', {type: 'checkbox', id: 'cb-' + id});
+    cb.checked = !!t.done;
+    var ta = el('textarea', {id: 'note-' + id, rows: '2', 'aria-label': 'Note for: ' + t.title,
+      placeholder: t.kind === 'decision' ? 'Your answer or comment (optional)' : 'Note (optional)'});
+    ta.value = getDraft(t);
+    var btn = el('button', {type: 'button', class: 'btn', text: 'Send'});
+    var st = el('span', {class: 'st', role: 'status'});
+    var last = el('div', {class: 'lastnote'});
+    refs[id] = {cb: cb, ta: ta, btn: btn, st: st, last: last, node: node};
+
+    cb.addEventListener('change', function () {
+      var cur = task(id);
+      cur.done = cb.checked;
+      if (cb.checked) sticky[id] = true; else delete sticky[id];
+      node.classList.toggle('is-done', cb.checked);
+      saving[id] = (saving[id] || 0) + 1;
+      api('POST', '/tasks/' + encodeURIComponent(id), {done: cb.checked}).then(function () {
+        if (status[id] && status[id].cls === 'st-failed') delete status[id];
+      }, function (e) {
+        status[id] = {cls: 'st-failed', text: 'Not saved: ' + why(e)};
+      }).then(function () { saving[id]--; render(); });
+      render();
+    });
+    ta.addEventListener('input', function () {
+      drafts[id] = ta.value;
+      store(draftKey(id), ta.value);
+      refreshStatus(id);
+      clearTimeout(timers[id]);
+      timers[id] = setTimeout(function () {
+        api('POST', '/tasks/' + encodeURIComponent(id), {note: drafts[id]}).then(function () {
+          if (status[id] && status[id].cls === 'st-failed') { delete status[id]; refreshStatus(id); }
+        }, function (e) {
+          status[id] = {cls: 'st-queued', text: 'Kept in this browser only: ' + why(e)}; refreshStatus(id);
+        });
+      }, SAVE_MS);
+    });
+    ta.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) btn.click(); });
+    btn.addEventListener('click', function () {
+      var cur = task(id);
+      clearTimeout(timers[id]);
+      btn.disabled = true;
+      deliver('task:' + id, {kind: 'task_update', task_id: id, done: !!cur.done, note: drafts[id] !== undefined ? drafts[id] : ta.value}, function (s) {
+        status[id] = s; refreshStatus(id);
+      }).then(function (r) {
+        delete status[id];
+        cur.last_send = {id: r.id, at: r.sent_at, status: r.status, done: String(!!cur.done), note: getDraft(cur)};
+        if (getDraft(cur).trim()) cur.last_note = {id: r.id, at: r.sent_at, text: getDraft(cur), status: r.status};
+        store(draftKey(id), null);
+        refreshStatus(id);
+      }, function () { /* status already shows the failure */ }).then(function () { btn.disabled = false; });
+    });
+    return el('div', {class: 'task-ctl'}, [
+      el('label', {class: 'check'}, [cb, el('span', {text: t.kind === 'decision' ? 'Approved' : 'Done'})]),
+      ta,
+      el('div', {class: 'task-actions'}, [btn, st]),
+      last
+    ]);
+  }
+  function refreshStatus(id) {
+    var r = refs[id], t = task(id);
+    if (!r || !t) return;
+    var s = status[id] || fromLast(t);
+    var text = s ? s.text : '';
+    if (!status[id] && isUnsent(t)) text += (text ? ' · changes not sent yet' : 'Not sent yet');
+    r.st.className = 'st ' + (s ? s.cls : 'st-muted');
+    r.st.textContent = text;
+    var ln = t.last_note;                 // what the person last sent for this task, as received
+    r.last.hidden = !ln;
+    r.last.textContent = ln ? 'You sent (' + when(ln.at) + ', ' + stWord(ln.status) + '): ' + ln.text : '';
+  }
+
+  /* One send: shows sending / sent / queued / failed through show(). */
+  function deliver(key, body, show) {
+    var text = JSON.stringify(body), f = inflight[key];
+    if (!f || f.sig !== text) f = inflight[key] = {sig: text, id: newId()};
+    show({cls: 'st-wait', text: 'Sending…'});
+    var payload = {id: f.id}, k;
+    for (k in body) payload[k] = body[k];
+    return api('POST', '/send', payload).then(function (r) {
+      delete inflight[key];
+      show(r.delivered ? {cls: 'st-sent', text: (r.status === 'local' ? 'Saved for the orchestrator ' : 'Sent ') + hhmm()}
+        : {cls: 'st-queued', text: 'Queued: not delivered yet' + (r.error ? ' (' + r.error + ')' : '') + '. It will retry.'});
+      S.pending = r.pending;
+      return r;
+    }, function (e) {
+      show({cls: 'st-failed', text: 'Failed: ' + why(e) + '. Press Send to try again.'});
+      throw e;
+    });
+  }
+
+  /* ---- layout ---- */
+  function layoutSig() {
+    return JSON.stringify([S.live, S.tasks.map(function (t) { return [t.id, t.kind, t.title, t.details, t.how, isDone(t)]; })]);
+  }
+  function render(force) {
+    var s = layoutSig();
+    if (force || s !== sig) {
+      sig = s;
+      var a = document.activeElement, focusId = a && a.id, ss = null, se = null;
+      if (a && a.setSelectionRange && a.tagName === 'TEXTAREA') { ss = a.selectionStart; se = a.selectionEnd; }
+      refs = {}; cards = {};
+      var open = $('tasks-open'), done = $('tasks-done-list'), nOpen = 0, nDone = 0;
+      open.textContent = ''; done.textContent = '';
+      S.tasks.forEach(function (t) {
+        if (isDone(t)) { done.appendChild(taskEl(t)); nDone++; } else { open.appendChild(taskEl(t)); nOpen++; }
+      });
+      if (!nOpen) open.appendChild(el('p', {class: 'muted', text: S.tasks.length ? 'Nothing is waiting for you.' : 'No tasks yet.'}));
+      $('tasks-done-n').textContent = nDone;
+      $('tasks-done').hidden = !nDone;
+      if (focusId) {
+        var f = $(focusId);
+        if (f) { f.focus(); if (ss !== null && f.setSelectionRange) f.setSelectionRange(ss, se); }
+      }
+    } else {
+      S.tasks.forEach(function (t) {
+        var r = refs[t.id];
+        if (r && !saving[t.id] && document.activeElement !== r.cb) r.cb.checked = !!t.done;
+      });
+    }
+    S.tasks.forEach(function (t) { refreshStatus(t.id); drawReplies(t); });
+    renderHint();
+    renderThread();
+  }
+  function renderHint() {
+    var h = $('tasks-hint');
+    h.textContent = '';
+    if (!S.live) {
+      h.appendChild(document.createTextNode('This is a read-only copy. To tick, write notes or send, open '));
+      h.appendChild(el('a', {href: LIVE_URL, text: LIVE_URL}));
+      h.appendChild(document.createTextNode('.'));
+      return;
+    }
+    h.appendChild(document.createTextNode('Tick a box when it is done (or approved). Write a note for any other answer. ' +
+      (S.delivery === 'local' ? 'Send saves it in the local inbox, where the orchestrator picks it up' : 'Send passes it to the orchestrator') +
+      '; its answers show up under the task.'));
+    if (stale) h.appendChild(el('span', {class: 'st-failed', text: ' Cannot reach the build log server right now; retrying.'}));
+    if (S.pending) h.appendChild(el('span', {class: 'st-queued', text: ' ' + S.pending + ' message' + (S.pending > 1 ? 's are' : ' is') + ' waiting to be delivered; retrying every few minutes.'}));
+  }
+  /* ---- message to the orchestrator ---- */
+  var msgText = $('msg-text'), msgBtn = $('msg-send'), msgSt = $('msg-status');
+  function showMsg(s) { msgSt.className = 'st ' + s.cls; msgSt.textContent = s.text; }
+  var md = store(NS + 'draft.__message');
+  if (md) msgText.value = md;
+  msgText.addEventListener('input', function () { store(NS + 'draft.__message', msgText.value || null); });
+  msgText.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) msgBtn.click(); });
+  msgBtn.addEventListener('click', function () {
+    var text = msgText.value;
+    if (!text.trim()) { showMsg({cls: 'st-failed', text: 'Write a message first.'}); return; }
+    msgBtn.disabled = true;
+    deliver('message', {kind: 'message', note: text}, showMsg).then(function () {
+      msgText.value = ''; store(NS + 'draft.__message', null);
+      return refresh();
+    }, function () { /* keep the text; the status shows why */ }).then(function () { msgBtn.disabled = false; });
+  });
+
+  /* ---- "updated" badge ---- */
+  function markSeen() {                 // new tasks; in place: never rebuild the cards under a click
+    if (!Object.keys(unseen).length) return;
+    store(NS + 'seen', JSON.stringify(S.tasks.map(function (t) { return t.id; })));
+    unseen = {};
+    Array.prototype.slice.call(document.querySelectorAll('#tasks .tag.new')).forEach(function (n) { n.remove(); });
+    badge();
+  }
+  function markAllSeen() {              // the pill: new tasks and every new reply
+    markSeen();
+    S.tasks.forEach(function (t) { if (hasNewReply(t)) seenReplies[t.id] = newestAt(t.replies); });
+    store(NS + 'replies.seen', JSON.stringify(seenReplies));
+    S.tasks.forEach(drawReplies);
+    seeGeneral();
+    badge();
+  }
+  function badge() {
+    var n = Object.keys(unseen).length + S.tasks.filter(hasNewReply).length + (generalNew() ? 1 : 0);
+    var pill = $('tasks-pill'), h1 = document.querySelector('h1');
+    $('tasks-done-new').hidden = !S.tasks.some(function (t) { return isDone(t) && hasNewReply(t); });   // a reply inside the closed Done list
+    if (!pill && h1) {
+      pill = el('span', {id: 'tasks-pill', class: 'pill', role: 'button', tabindex: '0', title: 'New tasks or replies. Click to dismiss.'});
+      pill.addEventListener('click', markAllSeen);
+      h1.appendChild(document.createTextNode(' ')); h1.appendChild(pill);
+    }
+    if (pill) { pill.hidden = !n; pill.textContent = 'updated · ' + n + ' new'; }
+    document.title = (n ? '(' + n + ') ' : '') + PAGE_TITLE;
+  }
+  $('tasks').addEventListener('pointerdown', markSeen);
+  $('tasks').addEventListener('focusin', markSeen);
+  $('msgbox').addEventListener('pointerdown', seeGeneral);
+  $('msgbox').addEventListener('focusin', seeGeneral);
+
+  /* ---- loading and polling ---- */
+  function applyTasks(d) {
+    var prev = {};
+    S.tasks.forEach(function (t) { prev[t.id] = t; });
+    S.live = everLive = true; stale = false; S.pending = d.pending || 0; S.delivery = d.delivery || 'webhook';
+    S.tasks = d.tasks;
+    S.tasks.forEach(function (t) { if (saving[t.id] && prev[t.id]) t.done = prev[t.id].done; });
+    var ids = S.tasks.map(function (t) { return t.id; }), seen = null;
+    try { seen = JSON.parse(store(NS + 'seen')); } catch (e) { /* first visit */ }
+    if (!Array.isArray(seen)) { seen = ids; store(NS + 'seen', JSON.stringify(ids)); }
+    unseen = {};
+    S.tasks.forEach(function (t) { if (seen.indexOf(t.id) < 0 && !t.done) unseen[t.id] = true; });
+    render(); badge();
+  }
+  function refresh() {
+    return Promise.all([
+      api('GET', '/tasks'),
+      api('GET', '/messages').catch(function () { return null; })   // the thread is optional
+    ]).then(function (res) {
+      offlineTicks = 0;
+      if (res[1]) S.general = res[1].messages || [];
+      applyTasks(res[0]);
+    }, function () {
+      if (everLive) { stale = true; renderHint(); }      // server hiccup: keep what the person is typing
+      else if (firstRefresh) { S.live = false; render(true); }
+    }).then(function () {
+      if (firstRefresh) { firstRefresh = false; restoreScroll(); }
+    });
+  }
+  function restoreScroll() { if (pendingScroll !== null) window.scrollTo(0, parseInt(pendingScroll, 10) || 0); }
+  window.addEventListener('load', restoreScroll);
+
+  function busy() {
+    var a = document.activeElement;
+    if (a && a.tagName === 'TEXTAREA') return true;
+    if (msgText.value.trim()) return true;
+    return S.live && S.tasks.some(unsentNote);
+  }
+  function reloadNow() {
+    try { window.sessionStorage.setItem(NS + 'scroll', String(Math.round(window.pageYOffset))); } catch (e) { /* ignore */ }
+    window.location.reload();
+  }
+  $('tasks-reload').addEventListener('click', reloadNow);
+  function maybeReload() {
+    if (!pageChanged) return;
+    if (busy()) { $('tasks-banner').hidden = false; return; }
+    reloadNow();
+  }
+  function poll() {
+    return api('GET', '/version').then(function (v) {
+      if (pageMtime === null) pageMtime = v.mtime; else if (v.mtime !== pageMtime) pageChanged = true;
+    }, function () { /* tasks fetch below decides live or not */ }).then(refresh).then(function () {
+      if (everLive) { if (!stale) maybeReload(); return; }
+      offlineTicks++;                                  // no server: keep the old 5 minute refresh
+      if (offlineTicks % 10 === 0 && !busy()) reloadNow();
+    });
+  }
+  render(true); badge();
+  poll();
+  setInterval(poll, POLL_MS);
+  $('tasks-done').addEventListener('toggle', function () { store(NS + 'doneOpen', this.open ? '1' : '0'); });
+  $('tasks-done').open = store(NS + 'doneOpen') === '1';
+})();
+</script>
+</section>
+<!-- TASKS:END -->
+
+<p>@@INTRO@@</p>
+@@BEGIN:current@@
+
+<!-- CURRENT:START -->
+<h2>Current work</h2>
+<p>In progress: setting up this build log. Next: the first real status update.</p>
+<!-- CURRENT:END -->
+@@END:current@@
+@@BEGIN:goals@@
+
+<h2>Goals</h2>
+<!-- GOALS:START -->
+<div class="goals">
+  <div class="goal"><b>First goal</b><span class="muted">One sentence: what done looks like.</span></div>
+  <div class="goal"><b>Second goal</b><span class="muted">One sentence: what done looks like.</span></div>
+</div>
+<!-- GOALS:END -->
+@@END:goals@@
+@@BEGIN:cards@@
+
+<h2>@@CARDS_HEADING@@</h2>
+<!-- CARDS:START -->
+<p class="muted">Each card says only what the evidence shows. Green: shown on the main branch, with the evidence in git. Amber: partly shown, not yet checked, or open. Red: blocked.</p>
+<div class="cards">
+
+  <div class="card">
+    <div class="body">
+      <h3>Example area</h3>
+      <div><span class="tag">area</span><span class="tag">owner</span></div>
+      <div class="stage">One line: where it stands, in plain words</div>
+      <ul>
+        <li class="ok">Something shown on the main branch, with the evidence file in git</li>
+        <li class="wip">Partly shown: seen once in a scripted run</li>
+        <li class="wip">Not yet checked: the next step</li>
+      </ul>
+      <div class="stage">Evidence: <a class="status-src" href="@@STATUS_SRC@@">status list</a></div>
+    </div>
+  </div>
+
+</div>
+<!-- CARDS:END -->
+@@END:cards@@
+@@BEGIN:modules@@
+
+<h2>@@MODULES_HEADING@@</h2>
+<!-- MODULES:START -->
+<table>
+  <tr><th>Module</th><th>Owner</th><th>Status</th></tr>
+  <tr><td>Example module</td><td>main thread</td><td class="wip">Not yet checked</td></tr>
+</table>
+<!-- MODULES:END -->
+@@END:modules@@
+@@BEGIN:timeline@@
+
+<h2>Timeline</h2>
+<!-- TIMELINE:START -->
+<ol class="timeline">
+  <li><time>@@TODAY_SHORT@@</time><span class="who">setup</span>Build log, Your tasks panel and feedback webhook set up.</li>
+</ol>
+<!-- TIMELINE:END -->
+@@END:timeline@@
+
+<footer>Sources: git log and the linked status lists. Screenshots are local only (@@MEDIA_DIR@@, not committed).<br>
+How this page works: <code>@@SERVER@@</code> (user service <code>@@SERVICE@@</code>) serves it at @@LIVE_URL@@ and powers the Your tasks panel. Tasks live in <code>@@TASKS_FILE@@</code> and change only through <code>@@TASKS_CLI@@</code>. Send signs your message and passes it to the orchestrator; anything undelivered waits in <code>@@STATE_DIR@@</code> and is retried.</footer>
+</main>
+</body>
+</html>
