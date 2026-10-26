@@ -228,6 +228,8 @@ def commit_paths(paths, message, cwd):
 
 def cmd_list(args, data):
     tasks = data["tasks"]
+    if args.id:
+        tasks = [find(data, args.id)]
     if not args.all:
         tasks = [t for t in tasks if t.get("status") != "done"]
     if args.json:
@@ -357,6 +359,10 @@ def cmd_inbox(args, settings):
             if m["id"] in seen and m["status"] in ("queued", "local"):
                 m["status"] = "read"
         shown = msgs if args.all else [m for m in msgs if m["status"] in ("queued", "local")]
+        if args.id:
+            shown = [m for m in shown if m["id"] in args.id]
+        if args.limit is not None:
+            shown = shown[:args.limit]
         if args.json:
             print(json.dumps(shown, indent=2, ensure_ascii=False))
         else:
@@ -364,6 +370,7 @@ def cmd_inbox(args, settings):
                 head = "%s %-6s %-11s" % (m.get("sent_at", "?"), m["status"], m.get("kind", "?"))
                 if m.get("kind") == "task_update":
                     head += " %s done=%s" % (m.get("task_id"), m.get("done"))
+                head += " id=%s" % m["id"]
                 print(head)
                 note = str(m.get("note", "")).strip()
                 if note:
@@ -387,6 +394,7 @@ def main(argv=None):
     p = sub.add_parser("list", help="show tasks")
     p.add_argument("--all", action="store_true", help="include done tasks")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--id", help="read one task by ID")
     p = sub.add_parser("add", help="add an open task")
     p.add_argument("--kind", required=True, choices=KINDS)
     p.add_argument("--title", required=True)
@@ -409,10 +417,14 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.add_argument("--mark-read", action="store_true", help="record the listed messages as handled")
     p.add_argument("--state-dir", help="default: ~/.local/state/<name>")
+    p.add_argument("--id", action="append", help="select a message ID; repeat for several (also limits --mark-read)")
+    p.add_argument("--limit", type=int, help="show/mark at most this many messages")
     p = sub.add_parser("commit", help="commit only the given paths, through a private index")
     p.add_argument("-m", "--message", required=True)
     p.add_argument("paths", nargs="+", help="paths relative to the project root (or absolute)")
     args = ap.parse_args(argv)
+    if args.cmd == "inbox" and args.limit is not None and args.limit < 1:
+        ap.error("--limit must be positive")
 
     settings = load_settings(args.settings)
     if args.cmd == "inbox":

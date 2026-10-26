@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${PLUGIN_ROOT}/skills/project-buildlog/scripts/buildlog_agent.py\" hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

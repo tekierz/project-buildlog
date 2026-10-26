@@ -1,25 +1,23 @@
 # project-buildlog
 
-A Claude Code plugin that gives any project a live build log page with a "Your tasks" panel.
-
-The page shows where the work stands. The panel lists what only you can do or decide. You tick a task, answer a decision or write a message, and press Send. A small local server signs the message (HMAC-SHA256) and posts it to a T3 Code webhook task in the orchestrator's thread. The orchestrator answers on the page.
+A shared buildlog for Codex and Claude Code, including through T3 Code. The page shows progress, agent work, and the actions or decisions that need you. You can send a message and read the orchestrator's reply there.
 
 ![The Your tasks panel](skills/project-buildlog/assets/panel-screenshot.png)
 
-## What you get
+## What it provides
 
-- **A page** (`docs/buildlog.html`) with sections for the latest update, your tasks, current work, goals, status cards with measured progress bars, modules and a timeline. It refreshes itself without wiping what you type.
-- **A local server** on 127.0.0.1, run as a systemd user service. It serves the repo read-only, guards every POST against cross-site requests, and queues and retries messages that fail to send.
-- **A task CLI** to add, close, reopen and reply to tasks, read the inbox, and commit through a private git index.
-- **A private key and webhook URL** in `~/.config/<name>/webhook.json` (mode 600), outside git.
-- **Two T3 Code tasks**: the signed webhook into the orchestrator's thread, and an optional hourly heartbeat.
-- **Checks**: unit tests, plus `verify.py`, which runs end to end against a fake T3 webhook (or the real one).
+- A live page with user tasks, replies, work status, evidence-based progress bars and a timeline. Drafts survive updates.
+- Agent work records with owners, parent tasks, blockers and actual T3 task IDs. Python renders updates from data.
+- A status brief capped at 2,400 characters by default. Revision checks skip unchanged state; details load on demand.
+- Saved dark, light, system and high contrast themes, cards/compact views, and a color-blind palette. Display changes need no agent call.
+- Optional startup hook adapters and signed T3 webhook feedback. Local inbox delivery works without T3.
+- A loopback-only server, retry queue, private credential storage and optional systemd user service.
 
-Everything is Python standard library. Nothing to install with pip.
+Python standard library only. No package dependencies or model API calls.
 
 ## Install
 
-This plugin is listed in the [Dalt's Bazar](https://github.com/tekierz/dalts-bazar) marketplace. In Claude Code:
+In Claude Code, from [Dalt's Bazar](https://github.com/tekierz/dalts-bazar):
 
 ```bash
 /plugin marketplace add tekierz/dalts-bazar
@@ -27,52 +25,58 @@ This plugin is listed in the [Dalt's Bazar](https://github.com/tekierz/dalts-baz
 /reload-plugins
 ```
 
-Then ask Claude in your project, for example: "set up a build log for this repo". The skill walks through the steps. You can also call it directly with `/project-buildlog:project-buildlog`.
+Invoke `/project-buildlog:project-buildlog`. For local development, use `claude --plugin-dir /absolute/path/to/this/repo`.
 
-## Requirements
-
-- **Python 3.10 or newer.**
-- **Linux with systemd user services** (`systemctl --user`) to keep the server running. Run `loginctl enable-linger` if it should keep running after you log out. Without systemd, pass `--no-service` to `setup.py init` and start the server yourself.
-- **git**, for commits and the evidence checks behind the progress bars.
-- **T3 Code with remote access turned on**, for the webhook step. It gives the webhook task its public URL.
-
-### Without T3 Code
-
-Everything except the webhook works without T3. Switch to local delivery:
+For Codex, symlink the skill from a local clone into a discovery directory:
 
 ```bash
-python3 -I <skill dir>/scripts/setup.py delivery --project /path/to/repo local
+mkdir -p ~/.agents/skills
+ln -s /absolute/path/project-buildlog-plugin/skills/project-buildlog ~/.agents/skills/project-buildlog
 ```
 
-Messages from the page then wait in a local inbox. Agents read them with `buildlog_tasks.py inbox` and mark them handled with `inbox --mark-read`. Poll it from a heartbeat, from `/loop 30m`, or at the start of each turn.
+Use `.agents/skills/project-buildlog` for project scope. Keep any existing installation; choose another destination if occupied. Invoke `$project-buildlog`. This repository also includes a portable root plugin manifest. A Claude installation does not automatically install the Codex skill.
 
-## Setup in brief
+In T3 Code, restart the agent session after changing provider skill/plugin installations. Both providers use the same scripts and project data. See [compatibility and source evidence](skills/project-buildlog/references/compatibility.md) for host limits and optional hook setup.
 
-The skill (`skills/project-buildlog/SKILL.md`) has the full steps. In short:
+## Set up a project
 
-1. `setup.py init` copies the scripts into the project, writes the page and task list, makes the secret, and installs the service.
-2. In the orchestrator's thread, create the T3 webhook task from the arguments file that init writes.
-3. Store the returned webhook URL with `setup.py set-url` (read from stdin, never from the command line).
-4. Run `verify.py`, then `verify.py --real`.
-5. Optional: add the hourly heartbeat task.
-
-Maintenance commands: `status`, `rotate-secret`, `change-port`, `upgrade-page`, `delivery`, `t3-args` and `remove`.
-
-## Security
-
-- The server listens on 127.0.0.1 only and refuses foreign Host and Origin headers.
-- The secret and the webhook URL stay in `~/.config/<name>/webhook.json` (mode 600). They never go into git, logs, the page or the chat.
-- Every message to the webhook is signed. T3 checks the signature, an event filter and a replay key.
-
-## Tests
+Ask the agent to “set up a buildlog for this repo,” or run:
 
 ```bash
-cd skills/project-buildlog
-python3 -I scripts/tests/test_setup.py
-python3 -I scripts/tests/test_buildlog_server.py
-python3 -I scripts/tests/test_buildlog_progress.py
+python3 -I skills/project-buildlog/scripts/setup.py init --project /path/to/repo --title "My App"
 ```
 
-## License
+Init writes compact entries to both `AGENTS.md` and `CLAUDE.md`, with shared rules beside the page. Repeat `--rules-doc PATH` to choose entry points. It preserves existing instruction text and does not commit unless `--commit` is supplied.
+
+Requirements: Python 3.10+, Unix file locks, and git for commits/evidence. Linux systemd user services keep the server running; otherwise use `--no-service` and start the copied server yourself. T3 webhook delivery requires remote access. Use `--delivery local` for a local inbox without T3.
+
+The [setup guide](skills/project-buildlog/references/setup.md) covers private webhook entry, verification, upgrades and removal. Recurring heartbeats are optional and created only when requested. Hooks supplement delivery; they cannot wake an idle agent, and hook execution in T3 still needs a live provider check.
+
+## Routine work
+
+```bash
+python3 -I /path/to/repo/tools/buildlog/buildlog_agent.py brief
+python3 -I /path/to/repo/tools/buildlog/buildlog_agent.py work parser --title "Implement parser" --status running --owner child
+python3 -I /path/to/repo/tools/buildlog/buildlog_agent.py note "Parser passes the input checks."
+python3 -I /path/to/repo/tools/buildlog/buildlog_agent.py render --commit
+```
+
+The [agent workflow](skills/project-buildlog/references/agent-workflow.md) covers bounded JSON/text, revision checks, delegation and message handling. Human tasks and replies use `buildlog_tasks.py`; agent subtasks use `buildlog_agent.py`. `--commit` commits only buildlog files through a private index; nothing is pushed. Full records stay in JSON, outside routine model context.
+
+Rendering replaces CURRENT, TIMELINE and UPDATED; migrate handwritten content there before using it on an older page. Other sections remain intact. Run `setup.py upgrade-page --project DIR` to add display controls to an older page with a backup.
+
+## Security and verification
+
+The server binds to 127.0.0.1, guards POST requests against cross-site use, and signs webhook messages. The signing key and webhook URL stay outside git in private files. A signed note is treated as the user's words, never as shell code. Use T3 private secret entry and a one-use `secretRef` for scheduling.
+
+```bash
+python3 -I skills/project-buildlog/scripts/tests/test_setup.py
+python3 -I skills/project-buildlog/scripts/tests/test_buildlog_server.py
+python3 -I skills/project-buildlog/scripts/tests/test_buildlog_progress.py
+python3 -I skills/project-buildlog/scripts/tests/test_buildlog_agent.py
+claude plugin validate .
+```
+
+`verify.py --project DIR` checks a temporary fake T3 webhook end to end; `--real` additionally tests the configured live webhook. Actual token savings depend on the provider and workload; character budgets are not token measurements.
 
 Apache-2.0. See [LICENSE](LICENSE).

@@ -11,10 +11,10 @@
     TASKS-SNAPSHOT, CURRENT, GOALS, CARDS, MODULES, TIMELINE). Never write
     comment syntax inside this comment, not even as an example: the first
     end-of-comment sequence closes it and the rest leaks onto the page.
-  - Update the UPDATED line (date, time, short commit hash), the cards, the
-    module table and the timeline in place. Add timeline entries at the TOP
-    of the timeline list (newest first), one li per notable change, in plain
-    words.
+  - UPDATED, CURRENT and TIMELINE are written by the agent CLI from work
+    records and notes (its render command). Record changes there instead of
+    editing these sections; render replaces their contents.
+  - Update the cards, goals and module table in place, in plain words.
   - Keep the TASKS section, its script and the panel CSS (between the
     TASKS-CSS markers) exactly as they are. The user's tasks and the
     orchestrator's replies live in @@TASKS_FILE@@ and change only through
@@ -190,6 +190,40 @@
   }
   /* TASKS-CSS:END */
   footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
+  /* DISPLAY-CSS:START */
+  :root { color-scheme: dark; }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f6f8fa; --panel: #fff; --panel2: #eef1f5; --line: #bac4d0;
+    --text: #182332; --muted: #47566a; --accent: #805300; --good: #176b40;
+    --warn: #805300; --bad: #ae233b; --info: #155fba;
+  }
+  :root[data-theme="contrast"] {
+    --bg: #000; --panel: #000; --panel2: #141414; --line: #fff;
+    --text: #fff; --muted: #eee; --accent: #ffe66d; --good: #70dfff;
+    --warn: #ffe66d; --bad: #ffb0df; --info: #70dfff;
+  }
+  :root[data-palette="colorblind"] { --good: #64b5ef; --warn: #f3b35b; --bad: #dd9fd2; --info: #9ebfff; }
+  :root[data-theme="light"][data-palette="colorblind"] { --good: #005b96; --warn: #805100; --bad: #8d3677; --info: #155fba; }
+  :root[data-theme="contrast"][data-palette="colorblind"] { --good: #70dfff; --warn: #ffe66d; --bad: #ffb0df; }
+  .display-options { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-bottom: 24px; }
+  .display-options label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .display-options select { background: var(--panel); color: var(--text); border: 1px solid var(--line); padding: 6px; border-radius: 5px; }
+  :focus-visible { outline: 3px solid var(--info); outline-offset: 3px; }
+  .cards { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+  :root[data-view="compact"] .cards { display: block; }
+  :root[data-view="compact"] .card { margin-bottom: 8px; }
+  :root[data-view="compact"] .card img { display: none; }
+  :root[data-view="compact"] .card .body { padding: 10px 14px; gap: 4px; }
+  :root[data-view="compact"] h2 { margin-top: 24px; }
+  /* Text labels and segment patterns carry status independently of hue. */
+  .ok::before { content: "✓ "; } .wip::before { content: "◷ "; } .blocked::before { content: "! "; }
+  /* Palette colors with the original shine; stripes keep partial progress distinct from solid without hue. */
+  .cards .prog-fill .s { background: linear-gradient(180deg, rgba(255, 255, 255, .2), rgba(255, 255, 255, 0) 60%), var(--good); }
+  .cards .prog-fill .p { background: linear-gradient(180deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, 0) 60%),
+                                     repeating-linear-gradient(135deg, var(--warn) 0 6px, var(--panel) 6px 9px); }
+  :root[data-theme="light"] .btn:not(.ghost) { color: #fff; }
+  /* DISPLAY-CSS:END */
 </style>
 </head>
 <body>
@@ -201,6 +235,38 @@
   <div class="muted">Updated @@UPDATED@@</div>
   <!-- UPDATED:END -->
 </header>
+
+<!-- DISPLAY:START -->
+<div class="display-options" role="group" aria-label="Display preferences">
+  <label>Theme <select id="display-theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option><option value="contrast">High contrast</option></select></label>
+  <label>View <select id="display-view"><option value="cards">Cards</option><option value="compact">Compact list</option></select></label>
+  <label>Colors <select id="display-palette"><option value="standard">Standard</option><option value="colorblind">Color-blind friendly</option></select></label>
+</div>
+<script>
+(function () {
+  'use strict';
+  var root = document.documentElement, key = '@@NS@@.display', saved = {};
+  try { saved = JSON.parse(localStorage.getItem(key)) || {}; } catch (e) { /* use defaults */ }
+  var system = window.matchMedia('(prefers-color-scheme: light)');
+  var choices = {theme: ['system', 'dark', 'light', 'contrast'], view: ['cards', 'compact'], palette: ['standard', 'colorblind']};
+  function apply() {
+    Object.keys(choices).forEach(function (name) {
+      var value = document.getElementById('display-' + name).value;
+      saved[name] = value;
+      root.setAttribute('data-' + name, name === 'theme' && value === 'system' ? (system.matches ? 'light' : 'dark') : value);
+    });
+    try { localStorage.setItem(key, JSON.stringify(saved)); } catch (e) { /* preferences still work */ }
+  }
+  Object.keys(choices).forEach(function (name) {
+    var select = document.getElementById('display-' + name);
+    select.value = choices[name].indexOf(saved[name]) >= 0 ? saved[name] : choices[name][0];
+    select.addEventListener('change', apply);
+  });
+  if (system.addEventListener) system.addEventListener('change', apply);
+  apply();
+})();
+</script>
+<!-- DISPLAY:END -->
 
 <!-- TASKS:START -->
 <section id="tasks" class="tasks" data-live-url="@@LIVE_URL@@" data-ns="@@NS@@">
@@ -763,7 +829,7 @@
 
 <h2>@@CARDS_HEADING@@</h2>
 <!-- CARDS:START -->
-<p class="muted">Each card says only what the evidence shows. Green: shown on the main branch, with the evidence in git. Amber: partly shown, not yet checked, or open. Red: blocked.</p>
+<p class="muted">Each card says only what the evidence shows. Solid progress: shown on the main branch, with evidence in git. Striped progress: partly shown. Unfilled: not yet checked or open. Blocked items are labeled.</p>
 <div class="cards">
 
   <div class="card">

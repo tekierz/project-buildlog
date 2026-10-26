@@ -271,8 +271,8 @@ def note_html(roots):
     where = ", ".join("<code>%s/</code>" % html.escape(r) for r in roots)
     return ('<p class="muted prog-note" id="prog-how">How the bars are measured: from each card\'s status checklist '
             '(the <code>## Status</code> list in the linked file). The whole bar is every checklist line. '
-            'Solid green is the lines marked ✓ that cite a file under %s that is in git. '
-            'Striped amber is the lines that say &quot;partly shown&quot;. The empty part is everything else, '
+            'Solid progress is the lines marked ✓ that cite a file under %s that is in git. '
+            'Striped progress is the lines that say &quot;partly shown&quot;. The empty part is everything else, '
             'including lines ticked <code>[x]</code> without a ✓. '
             'Made by <code>buildlog_progress.py --write</code>.</p>\n' % where)
 

@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -40,8 +41,8 @@ import urllib.request
 SKILL = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL / "scripts"
 TEMPLATES = SKILL / "templates"
-COPY_SCRIPTS = ("buildlog_server.py", "buildlog_tasks.py", "buildlog_progress.py")
-COPY_TESTS = ("test_buildlog_server.py", "test_buildlog_progress.py")
+COPY_SCRIPTS = ("buildlog_server.py", "buildlog_tasks.py", "buildlog_progress.py", "buildlog_agent.py")
+COPY_TESTS = ("test_buildlog_server.py", "test_buildlog_progress.py", "test_buildlog_agent.py")
 SECTIONS = ("current", "goals", "cards", "modules", "timeline")
 EVENT = "buildlog_message"
 GUARD_START = "# project-buildlog: private and local-only files (never commit these)"
@@ -233,6 +234,8 @@ class Ctx:
             "SERVER": "%s/buildlog_server.py" % self.tools_rel, "SERVER_REL": "%s/buildlog_server.py" % self.tools_rel,
             "SERVER_ABS": str(self.server), "PROGRESS": "%s/buildlog_progress.py" % self.tools_rel,
             "PROGRESS_ABS": str(self.progress), "PAGE_ABS": str(self.page), "PAGE_REL": self.page_rel,
+            "AGENT_CLI_ABS": str(self.tools / "buildlog_agent.py"),
+            "AGENT_CLI_REL": "%s/buildlog_agent.py" % self.tools_rel,
             "STATE_DIR": "~/.local/state/%s/" % self.name, "MEDIA_DIR": s["media_dir"].rstrip("/") + "/",
             "EVIDENCE_DIR": s["evidence_dirs"][0], "NS": self.name,
         }
@@ -294,8 +297,8 @@ def webhook_schedule(ctx, secret):
             "filters": [{"path": "body.event", "op": "equals", "value": EVENT}]}
 
 
-def write_t3_args(ctx, quiet=False, webhook_too=True):
-    """Write the private schedule_task argument files. Returns their paths."""
+def t3_arguments(ctx):
+    """The webhook and heartbeat schedule_task records, built in memory."""
     cfg = read_config(ctx)
     secret = cfg.get("secret")
     if not secret:
@@ -305,12 +308,18 @@ def write_t3_args(ctx, quiet=False, webhook_too=True):
     prompt = render((TEMPLATES / "t3-webhook-prompt.md").read_text(), vals, "webhook prompt")
     hb = render((TEMPLATES / "t3-heartbeat-prompt.md").read_text(), vals, "heartbeat prompt")
     webhook = {"tool": "schedule_task",
-               "note": "Pass 'arguments' as-is from the orchestrator thread. Contains the HMAC secret: never echo it.",
+               "note": "Private key-bearing storage. Do not load into model context; use t3-args --redacted and request_secret.",
                "arguments": {"title": "%s: build log messages" % ctx.s["title"], "prompt": prompt,
                              "schedule": webhook_schedule(ctx, secret), "bindToCurrentThread": True}}
     heartbeat = {"tool": "schedule_task",
                  "arguments": {"title": "%s: hourly heartbeat" % ctx.s["title"], "prompt": hb,
                                "schedule": {"type": "interval", "everyMs": 3600000}, "bindToCurrentThread": True}}
+    return webhook, heartbeat
+
+
+def write_t3_args(ctx, quiet=False, webhook_too=True):
+    """Write the private schedule_task argument files. Returns their paths."""
+    webhook, heartbeat = t3_arguments(ctx)
     a = ctx.config_dir / "t3-webhook-task.json"
     b = ctx.config_dir / "t3-heartbeat-task.json"
     if webhook_too:
@@ -353,21 +362,38 @@ def cmd_init(args):
         warn("%s is not a git repository: --commit and evidence checks need git" % project)
         if args.commit:
             fail("--commit needs a git repository")
-    if sys.version_info < (3, 8):
-        fail("Python 3.8 or newer is needed")
-    title = args.title or project.name
-    slug = slugify(args.slug or project.name)
-    name = args.name or "%s-buildlog" % slug
-    if not re.match(r"^[a-z0-9][a-z0-9_.-]{0,62}$", name):
-        fail("--name must be lowercase letters, digits, dot, dash or underscore")
-    old = None
-    sp = settings_path(project, args.tools_dir)
+    if sys.version_info < (3, 10):
+        fail("Python 3.10 or newer is needed")
+    old = {}
+    requested_delivery = args.delivery
+    sp = settings_path(project, args.tools_dir or "tools/buildlog")
+    if args.tools_dir is None and not sp.is_file():
+        try:
+            sp = find_settings(project)
+        except SystemExit:
+            pass
     if sp.is_file():
         old = json.loads(sp.read_text())
         ok("existing setup found (%s): refreshing it" % sp.relative_to(project))
-    service = args.service or (old or {}).get("service") or name
-    port = args.port or (old or {}).get("port") or pick_port(name)
-    homes = {"config_home": args.config_home, "state_home": args.state_home, "systemd_dir": args.systemd_dir}
+    # Omitted options keep installed values. An upgrade must not switch the page,
+    # task file, private credential identity or custom tools directory to defaults.
+    defaults = {"tools_dir": "tools/buildlog", "page": "docs/buildlog.html", "tasks": None,
+                "media_dir": "docs/buildlog-media", "rules_doc": ["AGENTS.md", "CLAUDE.md"]}
+    for key, default in defaults.items():
+        if getattr(args, key) is None:
+            setattr(args, key, old.get("rules_docs" if key == "rules_doc" else key, default))
+    args.sections = args.sections if args.sections is not None else ",".join(old.get("sections", SECTIONS))
+    args.evidence_dir = args.evidence_dir or old.get("evidence_dirs", ["docs/evidence"])[0]
+    args.delivery = args.delivery or "webhook"
+    title = args.title or old.get("title") or project.name
+    slug = slugify(args.slug or old.get("slug") or project.name)
+    name = args.name or old.get("name") or "%s-buildlog" % slug
+    if not re.match(r"^[a-z0-9][a-z0-9_.-]{0,62}$", name):
+        fail("--name must be lowercase letters, digits, dot, dash or underscore")
+    service = args.service or old.get("service") or name
+    port = args.port or old.get("port") or pick_port(name)
+    homes = {key: getattr(args, key) or (old.get("_homes") or {}).get(key)
+             for key in ("config_home", "state_home", "systemd_dir")}
     sections = [x.strip() for x in args.sections.split(",") if x.strip()]
     bad = [x for x in sections if x not in SECTIONS]
     if bad:
@@ -379,6 +405,8 @@ def cmd_init(args):
         "tools_dir": args.tools_dir, "service": service,
         "signature_header": args.header or (old or {}).get("signature_header") or "x-%s-signature" % slug,
         "evidence_dirs": [args.evidence_dir], "media_dir": args.media_dir, "sections": sections,
+        "agent_state": old.get("agent_state", str(Path(args.page).with_name("buildlog-state.json"))),
+        "rules_docs": args.rules_doc,
     }
     if any(homes.values()):
         settings["_homes"] = {k: v for k, v in homes.items() if v}
@@ -477,8 +505,8 @@ def cmd_init(args):
                "note": "HMAC-SHA256 hex of the raw JSON body; the key is this secret text. Never commit this file."}
         write_config(ctx, cfg)
         ok("new 32-byte secret (64 hex characters) in %s" % ctx.config)
-    if args.delivery == "local" and cfg.get("delivery") != "local":
-        cfg["delivery"] = "local"
+    if requested_delivery is not None and cfg.get("delivery") != requested_delivery:
+        cfg["delivery"] = requested_delivery
         write_config(ctx, cfg)
     mode = ctx.config.stat().st_mode & 0o777
     if mode != 0o600:
@@ -501,24 +529,17 @@ def cmd_init(args):
     write_atomic(ctx.unit_in_repo, unit)
     ok("unit file %s" % ctx.unit_in_repo.relative_to(project))
     if args.no_service:
-        warn("--no-service: not installed. Start it by hand with: python3 -I %s" % ctx.server)
+        warn("--no-service: not installed. Start it by hand with: python3 -I %s" % shlex.quote(str(ctx.server)))
     else:
         install_service(ctx, unit, restart=ours)
 
-    if args.rules_doc:
-        step("8. Write the agent rules")
-        doc = project / args.rules_doc
-        rules = render((TEMPLATES / "agent-rules.md").read_text(), dict(ctx.values(), PROJECT=title), "rules")
-        if doc.exists() and "## Build log and \"Your tasks\"" in doc.read_text():
-            ok("%s already has the build log rules" % args.rules_doc)
-        else:
-            prev = doc.read_text() if doc.exists() else ""
-            write_atomic(doc, (prev.rstrip("\n") + "\n\n" if prev.strip() else "") + rules)
-            ok("added the build log rules to %s" % args.rules_doc)
+    step("8. Write shared agent rules and compact entry points")
+    rules_rel = write_rules(ctx)
+    rules_docs = settings["rules_docs"]
 
     if args.commit:
         step("9. Commit the new files (private index)")
-        paths = [args.tools_dir, args.page, settings["tasks"], ".gitignore"] + ([args.rules_doc] if args.rules_doc else [])
+        paths = [args.tools_dir, args.page, settings["tasks"], rules_rel, ".gitignore"] + rules_docs
         r = run([sys.executable, "-I", str(ctx.cli), "commit", "-m", "buildlog: build log and Your tasks panel"] + paths)
         if r.returncode != 0:
             fail("commit failed: %s" % r.stderr.strip(), fatal=False)
@@ -596,25 +617,66 @@ def install_service(ctx, unit, restart=False):
         warn("user lingering is off: the service stops when you log out. Turn it on with: loginctl enable-linger")
 
 
+RULES_START, RULES_END = "<!-- project-buildlog:START -->", "<!-- project-buildlog:END -->"
+LEGACY_RULES = '## Build log and "Your tasks"'
+
+
+def shared_rules_rel(ctx):
+    return str(Path(ctx.page_rel).with_name("buildlog-agent.md"))
+
+
+def write_rules(ctx):
+    """Write the shared rules beside the page and a small managed block in each entry point."""
+    rel = shared_rules_rel(ctx)
+    rules = render((TEMPLATES / "agent-rules.md").read_text(), dict(ctx.values(), PROJECT=ctx.s["title"]), "rules")
+    write_atomic(ctx.root / rel, rules)
+    snippet = ('%s\nBuild log: %s. Read `%s` when handling buildlog work.\n'
+               'Start with `python3 -I "%s" brief`; details only as needed.\n%s\n' %
+               (RULES_START, ctx.live_url, rel, ctx.tools / "buildlog_agent.py", RULES_END))
+    for rules_doc in ctx.s.get("rules_docs", []):
+        doc = ctx.root / rules_doc
+        prev = doc.read_text() if doc.exists() else ""
+        if RULES_START in prev:
+            if prev.count(RULES_START) != 1 or prev.count(RULES_END) != 1:
+                fail("%s has malformed buildlog markers" % rules_doc)
+            updated = re.sub(re.escape(RULES_START) + r".*?" + re.escape(RULES_END) + r"\n?",
+                             lambda match: snippet, prev, flags=re.S)
+        elif LEGACY_RULES in prev:
+            warn("%s has the older full rules; kept them. Replace that section with a pointer to %s when convenient"
+                 % (rules_doc, rel))
+            continue
+        else:
+            updated = (prev.rstrip("\n") + "\n\n" if prev.strip() else "") + snippet
+        if updated != prev:
+            write_atomic(doc, updated)
+        ok("compact buildlog instructions in %s" % rules_doc)
+    return rel
+
+
 def print_next_steps(ctx, cfg):
+    if cfg.get("delivery") == "local":
+        print("\nLocal inbox ready. Read: python3 -I %s inbox --limit 5\nPage: %s" % (shlex.quote(str(ctx.cli)), ctx.live_url))
+        return
     a = ctx.config_dir / "t3-webhook-task.json"
     b = ctx.config_dir / "t3-heartbeat-task.json"
     if cfg.get("url"):
         print("\n== Already wired to a webhook (host %s). Check it with:\n     python3 -I %s --project %s --real"
-              % (urllib.parse.urlsplit(cfg["url"]).hostname, SCRIPTS / "verify.py", ctx.root))
+              % (urllib.parse.urlsplit(cfg["url"]).hostname, shlex.quote(str(SCRIPTS / "verify.py")),
+                 shlex.quote(str(ctx.root))))
         return
     print("""
-== Remaining steps (the orchestrator does these; see SKILL.md steps 5 to 9)
+== Remaining steps (see references/setup.md)
 
 A. In the orchestrator thread (the thread that should receive messages), create the
-   webhook task with schedule_task. Use the "arguments" object from
-     %(a)s
-   exactly as written (title, prompt, schedule, bindToCurrentThread). Read the file with a
-   tool and pass the values; never paste the secret into chat. The schedule is:
-     type webhook, signature {header %(header)s, encoding hex, prefix sha256=, secret from the file},
+   webhook task with schedule_task. Obtain safe arguments with:
+     python3 -I %(setup)s t3-args --project %(root)s --redacted
+   Call request_secret for private key entry, then add its one-use secretRef to signature.
+   The user copies the key on their own machine, never into chat:
+     python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["secret"], end="")' %(config)s | wl-copy
+   (xclip -selection clipboard or pbcopy instead of wl-copy elsewhere.)
+   Do not read the private key-bearing argument file into model context. The schedule is:
+     type webhook, signature {header %(header)s, encoding hex, prefix sha256=, secretRef},
      dedupe {replayKey {{body.id}}}, filters [body.event equals %(event)s]
-   Stricter option: call request_secret, have the user paste the secret from the file, and pass
-   secretRef instead of secret.
 
 B. Store the returned webhookUrl (stdin, so it stays out of argv and shell history):
      printf '%%s' 'WEBHOOK_URL' | python3 -I %(setup)s set-url --project %(root)s
@@ -625,12 +687,13 @@ C. Check the whole path:
      python3 -I %(verify)s --project %(root)s --real     (signed test to T3 + forged ones)
    Then confirm the test run with its nonce arrived in the orchestrator thread.
 
-D. Optional hourly heartbeat: schedule_task with the arguments in
+D. Only if the user requests an hourly heartbeat: schedule_task with the arguments in
      %(b)s
 
 Page: %(url)s   Service: %(service)s   Delivery: %(delivery)s""" % {
-        "a": a, "b": b, "header": ctx.s["signature_header"], "event": EVENT, "setup": SCRIPTS / "setup.py",
-        "verify": SCRIPTS / "verify.py", "root": ctx.root, "url": ctx.live_url, "service": ctx.service,
+        "a": a, "b": b, "header": ctx.s["signature_header"], "event": EVENT, "setup": shlex.quote(str(SCRIPTS / "setup.py")),
+        "config": shlex.quote(str(ctx.config)),
+        "verify": shlex.quote(str(SCRIPTS / "verify.py")), "root": shlex.quote(str(ctx.root)), "url": ctx.live_url, "service": ctx.service,
         "delivery": cfg.get("delivery", "webhook")})
 
 
@@ -658,12 +721,18 @@ def cmd_set_url(args):
     if args_file.exists() and not args.keep_args:
         args_file.unlink()
         ok("removed %s (its secret is no longer needed there; t3-args rewrites it)" % args_file.name)
-    print("Next: python3 -I %s --project %s --real" % (SCRIPTS / "verify.py", ctx.root))
+    print("Next: python3 -I %s --project %s --real" % (shlex.quote(str(SCRIPTS / "verify.py")), shlex.quote(str(ctx.root))))
     return 0
 
 
 def cmd_t3_args(args):
     ctx, _ = load_ctx(args)
+    if args.redacted:
+        # Built in memory: printing safe arguments must not recreate the key-bearing file set-url removed.
+        data = t3_arguments(ctx)[0]["arguments"]
+        del data["schedule"]["signature"]["secret"]
+        print(json.dumps(data, separators=(",", ":")))
+        return 0
     step("Write the schedule_task arguments")
     write_t3_args(ctx)
     return 0
@@ -677,17 +746,23 @@ def cmd_rotate(args):
     write_config(ctx, cfg)
     ok("new secret in %s" % ctx.config)
     update = {"tool": "update_scheduled_task",
-              "note": "Fill scheduledTaskId from list_scheduled_tasks. Contains the new secret: never echo it.",
+              "note": "Private key-bearing storage. Use t3-args --redacted and request_secret to update the retained scheduler ID.",
               "arguments": {"scheduledTaskId": "FROM list_scheduled_tasks",
                             "schedule": webhook_schedule(ctx, cfg["secret"])}}
     path = ctx.config_dir / "t3-rotate-secret.json"
     write_atomic(path, json.dumps(update, indent=1) + "\n", mode=0o600)
-    ok("update_scheduled_task arguments: %s" % path)
+    ok("update_scheduled_task arguments: %s (private fallback; do not read it into context)" % path)
     print("""
-Now, in the orchestrator thread: list_scheduled_tasks, find "%s: build log messages", and call
-update_scheduled_task with the arguments in that file (put in the real scheduledTaskId).
+Now, in the orchestrator thread:
+  1. Use the retained scheduler ID (or list_scheduled_tasks: "%(title)s: build log messages").
+  2. Call request_secret. The user copies the new key on their own machine, never into chat:
+       python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["secret"], end="")' %(config)s | wl-copy
+  3. Get the schedule from: python3 -I %(setup)s t3-args --project %(root)s --redacted
+     Add the returned secretRef to schedule.signature and call update_scheduled_task with that schedule.
 Messages sent in between are refused and stay queued; the server retries them every 3 minutes.
-Then run verify.py --real and delete %s.""" % (ctx.s["title"], path))
+Then run verify.py --real and delete %(path)s.""" % {
+        "title": ctx.s["title"], "config": shlex.quote(str(ctx.config)), "root": shlex.quote(str(ctx.root)),
+        "setup": shlex.quote(str(SCRIPTS / "setup.py")), "path": shlex.quote(str(path))})
     return 0
 
 
@@ -727,9 +802,10 @@ def cmd_change_port(args):
         if not good:
             fail("service does not answer on %d (%s)" % (args.port, why))
         ok("service restarted on %d; port %d %s" % (args.port, old, "free" if port_free(old) else "STILL IN USE"))
-    write_t3_args(ctx2, quiet=True)
-    print("Also: update_scheduled_task on both T3 tasks with the new prompts from %s (the URL in them changed),\n"
-          "and grep the project docs for :%d." % (ctx2.config_dir, old))
+    write_rules(ctx2)
+    write_t3_args(ctx2, quiet=True, webhook_too=not read_config(ctx2).get("url"))
+    print("Also: update_scheduled_task on both T3 tasks with the new prompts (t3-args --redacted; the URL in them\n"
+          "changed), and grep other project docs for :%d." % old)
     return 0
 
 
@@ -779,6 +855,15 @@ def cmd_upgrade_page(args):
             at = out.index("</style>")
             out = out[:at] + new_css + "\n" + out[at:]
             how = "added the panel CSS before </style> (the page had no TASKS-CSS markers; old panel rules stay, the new ones win)"
+        for pattern, insertion in (
+            (r"/\* DISPLAY-CSS:START \*/.*?/\* DISPLAY-CSS:END \*/", "</style>"),
+            (r"<!-- DISPLAY:START -->.*?<!-- DISPLAY:END -->", "<!-- TASKS:START -->"),
+        ):
+            block = re.search(pattern, tpl, re.S).group(0)
+            if re.search(pattern, out, re.S):
+                out = re.sub(pattern, lambda match: block, out, count=1, flags=re.S)
+            else:
+                out = out.replace(insertion, block + "\n" + insertion, 1)
         if out == text:
             ok("already up to date")
             return 0
@@ -843,7 +928,20 @@ def cmd_remove(args):
     else:
         warn("kept %s and %s (pass --purge to delete the key, inbox and state)" % (ctx.config_dir, ctx.state))
     if args.files:
-        for p in (ctx.tools, ctx.page, ctx.tasks):
+        for rules_doc in ctx.s.get("rules_docs", []):
+            doc = ctx.root / rules_doc
+            if doc.is_file():
+                text = doc.read_text()
+                if text.count(RULES_START) == text.count(RULES_END) == 1:
+                    text = re.sub(r"\n*" + re.escape(RULES_START) + r".*?" + re.escape(RULES_END) + r"\n?", "\n",
+                                  text, flags=re.S).strip("\n")
+                    if text:
+                        write_atomic(doc, text + "\n")
+                    else:
+                        doc.unlink()                # init created it for the block alone
+                    ok("removed the buildlog block from %s" % rules_doc)
+        for p in (ctx.tools, ctx.page, ctx.tasks, ctx.root / shared_rules_rel(ctx),
+                  ctx.root / ctx.s.get("agent_state", str(Path(ctx.page_rel).with_name("buildlog-state.json")))):
             if p.is_dir():
                 shutil.rmtree(p)
             elif p.exists():
@@ -875,27 +973,28 @@ def main(argv=None):
     p.add_argument("--name", help="state/config/User-Agent name (default: <slug>-buildlog)")
     p.add_argument("--port", type=int, help="port on 127.0.0.1 (default: a free one in 33650-33949)")
     p.add_argument("--service", help="systemd user service name (default: the name)")
-    p.add_argument("--page", default="docs/buildlog.html")
+    p.add_argument("--page", help="default: existing page or docs/buildlog.html")
     p.add_argument("--tasks", help="task file (default: buildlog-tasks.json next to the page)")
-    p.add_argument("--tools-dir", default="tools/buildlog")
-    p.add_argument("--sections", default=",".join(SECTIONS), help="optional sections, comma separated: " + ", ".join(SECTIONS))
+    p.add_argument("--tools-dir", help="default: existing tools directory or tools/buildlog")
+    p.add_argument("--sections", help="optional sections, comma separated: " + ", ".join(SECTIONS))
     p.add_argument("--cards-heading", default="Status")
     p.add_argument("--modules-heading", default="Modules")
     p.add_argument("--intro", default="What this project is, in one or two plain sentences.")
     p.add_argument("--status-src", default="README.md", help="status list the example card links (relative to the root)")
     p.add_argument("--header", help="signature header (default: x-<slug>-signature)")
-    p.add_argument("--delivery", choices=("webhook", "local"), default="webhook")
+    p.add_argument("--delivery", choices=("webhook", "local"), help="default: keep existing mode, or webhook")
     p.add_argument("--seed", default="default", help="default | none | a JSON file with a list of tasks")
-    p.add_argument("--evidence-dir", default="docs/evidence")
-    p.add_argument("--media-dir", default="docs/buildlog-media")
-    p.add_argument("--rules-doc", help="append the agent rules to this doc (e.g. CLAUDE.md or AGENTS.md)")
+    p.add_argument("--evidence-dir", help="default: existing directory or docs/evidence")
+    p.add_argument("--media-dir", help="default: existing directory or docs/buildlog-media")
+    p.add_argument("--rules-doc", action="append", help="instruction entry point; repeat for several (default: AGENTS.md and CLAUDE.md)")
     p.add_argument("--no-service", action="store_true", help="do not install the systemd user service")
     p.add_argument("--commit", action="store_true", help="commit the new files through a private index")
     p.add_argument("--force", action="store_true", help="replace an existing page")
     p = common(sub.add_parser("set-url", help="store the webhook URL, read from stdin"))
     p.add_argument("--url-file", help="read the URL from this file instead of stdin")
     p.add_argument("--keep-args", action="store_true", help="keep the schedule_task argument file")
-    common(sub.add_parser("t3-args", help="rewrite the schedule_task argument files"))
+    p = common(sub.add_parser("t3-args", help="rewrite the schedule_task argument files"))
+    p.add_argument("--redacted", action="store_true", help="print only webhook arguments with the signing secret removed; add a T3 secretRef before use")
     common(sub.add_parser("rotate-secret", help="new HMAC secret"))
     p = common(sub.add_parser("delivery", help="switch between webhook and local-only delivery"))
     p.add_argument("mode", choices=("webhook", "local"))

@@ -1,7 +1,7 @@
 {
   "name": "project-buildlog",
-  "version": "1.0.0",
-  "description": "A live build log page for any project, with a \"Your tasks\" panel: tick tasks, answer decisions and message the orchestrator from the page, and read its replies there. Local status server (systemd user service), task CLI, measured progress bars, HMAC-signed T3 Code webhook, hourly heartbeat and end-to-end checks. Python standard library only.",
+  "version": "1.1.0",
+  "description": "Live project buildlogs with a task/decision panel, compact agent handoffs, work tracking, saved display preferences and optional signed T3 Code feedback. Python standard library only.",
   "author": {
     "name": "tekierz"
   },

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -85,6 +86,13 @@ class SetupTests(unittest.TestCase):
         self.assertIn('"%s"' % (self.proj / "tools" / "buildlog" / "buildlog_server.py"), unit)   # quoted: space
         self.assertEqual(self.git("log", "-1", "--format=%B").strip(), "buildlog: build log and Your tasks panel")
         self.assertEqual(self.git("status", "--porcelain").strip(), "")
+        for instruction in ("AGENTS.md", "CLAUDE.md"):
+            text = (self.proj / instruction).read_text()
+            self.assertIn("buildlog-agent.md", text)
+            self.assertLess(len(text), 700)
+        safe = self.setup("t3-args", "--project", str(self.proj), "--redacted", *self.homes).stdout
+        self.assertNotIn(cfg["secret"], safe)
+        self.assertNotIn("secret", json.loads(safe)["schedule"]["signature"])
 
         v = subprocess.run([sys.executable, "-I", str(SCRIPTS / "verify.py"), "--project", str(self.proj), "--no-service"],
                            capture_output=True, text=True, env=self.env, timeout=600)
@@ -93,12 +101,26 @@ class SetupTests(unittest.TestCase):
         self.assertNotIn(cfg["secret"], v.stdout)
 
         self.assertIn("already up to date", self.setup("upgrade-page", "--project", str(self.proj), *self.homes).stdout)
+        # Older pages gain controls while keeping project sections and snapshots.
+        import re
+        old_page = re.sub(r"<!-- DISPLAY:START -->.*?<!-- DISPLAY:END -->", "", page, flags=re.S)
+        old_page = re.sub(r"/\* DISPLAY-CSS:START \*/.*?/\* DISPLAY-CSS:END \*/", "", old_page, flags=re.S)
+        (self.proj / "docs/buildlog.html").write_text(old_page)
+        self.setup("upgrade-page", "--project", str(self.proj), *self.homes)
+        upgraded = (self.proj / "docs/buildlog.html").read_text()
+        self.assertIn('id="display-theme"', upgraded)
+        for marker in ("CURRENT", "CARDS", "TIMELINE", "TASKS-SNAPSHOT"):
+            pattern = r"<!-- %s:START -->.*?<!-- %s:END -->" % (marker, marker)
+            self.assertEqual(re.search(pattern, page, re.S).group(0), re.search(pattern, upgraded, re.S).group(0))
         self.setup("set-url", "--project", str(self.proj), *self.homes, stdin="ftp://bad", check=False)
         self.assertNotEqual(self.setup("set-url", "--project", str(self.proj), *self.homes, stdin="ftp://bad", check=False).returncode, 0)
         out = self.setup("set-url", "--project", str(self.proj), *self.homes, stdin="https://relay.example/hook/SECRETPATH123456\n").stdout
         self.assertNotIn("SECRETPATH", out)
         self.assertFalse((cfg_dir / "t3-webhook-task.json").exists())
         self.assertEqual(json.loads((cfg_dir / "webhook.json").read_text())["url"], "https://relay.example/hook/SECRETPATH123456")
+        # Printing safe arguments must not recreate the key-bearing file that set-url removed.
+        self.setup("t3-args", "--project", str(self.proj), "--redacted", *self.homes)
+        self.assertFalse((cfg_dir / "t3-webhook-task.json").exists())
         old = cfg["secret"]
         self.setup("rotate-secret", "--project", str(self.proj), *self.homes)
         new = json.loads((cfg_dir / "webhook.json").read_text())["secret"]
@@ -111,6 +133,8 @@ class SetupTests(unittest.TestCase):
         self.setup("remove", "--project", str(self.proj), "--purge", "--files", *self.homes)
         self.assertFalse(cfg_dir.exists())
         self.assertFalse((self.proj / "tools" / "buildlog").exists())
+        self.assertFalse((self.proj / "docs/buildlog-agent.md").exists())
+        self.assertFalse((self.proj / "AGENTS.md").exists())        # init created it for the block alone
         self.assertNotIn("project-buildlog", (self.proj / ".gitignore").read_text())
 
     def test_busy_port_is_refused_with_a_hint(self):
@@ -124,6 +148,51 @@ class SetupTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("in use by something else", r.stdout)
         self.assertIn("ad-hoc server", r.stdout)
+
+    def test_instruction_blocks_preserve_user_text_and_refresh_once(self):
+        (self.proj / "AGENTS.md").write_text("# My rules\nPush only when asked.\n")
+        (self.proj / "CLAUDE.md").write_text("# Claude rules\nKeep replies brief.\n")
+        args = ("init", "--project", str(self.proj), "--no-service", "--seed", "none", *self.homes)
+        self.setup(*args)
+        self.setup(*args)
+        for name, original in (("AGENTS.md", "Push only when asked."), ("CLAUDE.md", "Keep replies brief.")):
+            text = (self.proj / name).read_text()
+            self.assertIn(original, text)
+            self.assertEqual(text.count("<!-- project-buildlog:START -->"), 1)
+        self.assertEqual(self.git("log", "--format=%s").strip(), "init")
+
+    def test_change_port_refreshes_rules_and_remove_keeps_user_text(self):
+        (self.proj / "CLAUDE.md").write_text("# Claude rules\nKeep replies brief.\n")
+        self.setup("init", "--project", str(self.proj), "--port", "33992", "--no-service", "--seed", "none", *self.homes)
+        self.setup("change-port", "--project", str(self.proj), "--port", "33993", *self.homes)
+        for name in ("AGENTS.md", "CLAUDE.md", "docs/buildlog-agent.md"):
+            text = (self.proj / name).read_text()
+            self.assertIn("127.0.0.1:33993/", text)
+            self.assertNotIn(":33992/", text)
+        self.setup("remove", "--project", str(self.proj), "--files", *self.homes)
+        self.assertEqual((self.proj / "CLAUDE.md").read_text(), "# Claude rules\nKeep replies brief.\n")
+        self.assertFalse((self.proj / "AGENTS.md").exists())
+
+    def test_refresh_keeps_custom_identity_paths_and_records(self):
+        result = self.setup("init", "--project", str(self.proj), "--no-service", "--delivery", "local",
+                            "--name", "chosen-log", "--title", "Chosen title", "--page", "site/status.html",
+                            "--tools-dir", "scripts/status", "--seed", "none", "--sections", "current,timeline", *self.homes)
+        cli = self.proj / "scripts/status/buildlog_agent.py"
+        subprocess.run([sys.executable, "-I", str(cli), "work", "a", "--title", "Keep this work"], check=True, capture_output=True)
+        subprocess.run([sys.executable, "-I", str(cli.with_name("buildlog_tasks.py")), "add", "--kind", "decision",
+                        "--title", "Keep this decision", "--details", "Pick later"], check=True, capture_output=True)
+        paths = [self.proj / "site/buildlog-state.json", self.proj / "site/buildlog-tasks.json",
+                 Path(self._tmp.name) / "cfg/chosen-log/webhook.json"]
+        before = [p.read_bytes() for p in paths]
+        self.setup("init", "--project", str(self.proj), "--no-service", "--seed", "none")
+        settings = json.loads((self.proj / "scripts/status/buildlog.json").read_text())
+        self.assertEqual((settings["name"], settings["title"], settings["page"], settings["tools_dir"]),
+                         ("chosen-log", "Chosen title", "site/status.html", "scripts/status"))
+        self.assertEqual(settings["sections"], ["current", "timeline"])
+        self.assertEqual([p.read_bytes() for p in paths], before)
+        self.assertFalse((self.proj / "docs/buildlog.html").exists())
+        command = result.stdout.split("Start it by hand with: ", 1)[1].splitlines()[0]
+        self.assertEqual(shlex.split(command)[-1], str(cli.with_name("buildlog_server.py")))
 
 
 if __name__ == "__main__":

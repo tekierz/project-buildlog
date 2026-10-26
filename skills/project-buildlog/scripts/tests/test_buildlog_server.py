@@ -712,6 +712,17 @@ class LocalInboxTests(Base):
     def inbox_cli(self, *args):
         return self.cli("inbox", "--state-dir", str(self.state), *args)
 
+    def test_selective_acknowledgment_preserves_other_messages(self):
+        self.write_config(delivery="local")
+        first = self.send(note="first")
+        second = self.send(note="second")
+        self.assertIn("id=" + first["id"], self.inbox_cli("--limit", "1").stdout)
+        self.assertEqual([m["id"] for m in json.loads(self.inbox_cli("--json", "--limit", "1").stdout)], [first["id"]])
+        self.inbox_cli("--id", second["id"], "--mark-read")
+        self.assertEqual([m["id"] for m in json.loads(self.inbox_cli("--json").stdout)], [first["id"]])
+        self.inbox_cli("--limit", "1", "--mark-read")
+        self.assertEqual(json.loads(self.inbox_cli("--json").stdout), [])
+
     def test_local_mode_keeps_messages_for_the_cli(self):
         self.write_config(delivery="local")
         out = self.send(note="please check the logs")

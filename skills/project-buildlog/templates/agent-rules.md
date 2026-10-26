@@ -1,23 +1,12 @@
 ## Build log and "Your tasks"
 
-The build log is served at @@LIVE_URL@@ by the user service `@@SERVICE@@` (`@@SERVER_REL@@`). Its "Your tasks" panel lists what only the user can do or decide, and lets them tick items, add notes and message the orchestrator. Replies reach the orchestrator through a signed webhook. Its URL and key are in `~/.config/@@NAME@@/webhook.json` and never go into the repo or the chat.
+Page: @@LIVE_URL@@. Run the scripts by absolute path in the checkout the server serves (`@@ROOT@@`). Worktree copies do not update this page.
 
-Rules for agents:
-
-- Tasks change only through the CLI, run by absolute path in the main checkout: `python3 -I @@TASKS_CLI_ABS@@ list|add|done|reopen ... --commit`. Never edit `@@TASKS_FILE@@` or the TASKS section of the page by hand.
-- Every answer from the user closes its task with that CLI (`done ID --commit`). Check that an action really happened before closing it.
-- Every answer to a panel message goes on the page with the reply CLI, not only in chat: `reply ID "text" --commit` under a task, `reply --general "text" --commit` for the conversation. The user reads the page.
-- A new manual step for the user becomes a task, with copy-paste commands in `--how`. Decisions say what a tick means and what no tick means.
-- Secrets go into files, never into chat: the task's command writes them to a private file (`umask 077`).
-- Commit through a private index (`@@TASKS_CLI_REL@@ commit -m MSG PATH...` or `--commit`). Short messages, no attribution or Co-Authored-By trailers. Never push.
-- The page is updated in one write, following the editing-rules comment at its top. Card bars come from `python3 -I @@PROGRESS_ABS@@ --write`.
-- Show each round's results with screenshots.
-
-How we mark status:
-
-- Evidence lives in git: small text files in `@@EVIDENCE_DIR@@/<YYYY-MM-DD>/<topic>/` (logs under about 200 KB, summaries, test output, command lists). Cite that path. Media stays local.
-- ✓ means shown on the main branch, and the evidence file is in git.
-- "partly shown" means something was seen, but less than the sentence says (one scripted run, a shortcut, an older build, or evidence outside git).
-- "not yet checked" means no run, or no record of one.
-- Say how it was reached ("scripted", "headless", "one run"). A number needs a log line.
-- Status checklists (`## Status` in the files the cards link): tick `[x]` only when the sentence as written was seen.
+- Begin with `python3 -I "@@AGENT_CLI_ABS@@" brief`. Use `--since REV` on repeat checks; load one work record with `show ID` when needed. Never read the full page or history just to get status.
+- Track agent subtasks with `work ID --title TEXT --owner NAME --status planned|running|blocked|review|done|cancelled`. Store the actual T3 `taskId` with `--task-id`; keep parent relationships with `--parent`. Summaries describe the result or blocker. A recorded status does not prove verification.
+- After meaningful progress, use `note TEXT` then `render --commit`. Rendering owns CURRENT, TIMELINE and UPDATED; it preserves tasks, cards, goals and modules. Do not render if those sections contain hand-written content you need to keep. Use `python3 -I "@@PROGRESS_ABS@@" --write` for measured card bars. Keep status claims tied to committed text evidence under `@@EVIDENCE_DIR@@`.
+- User actions, decisions and replies change only through `python3 -I "@@TASKS_CLI_ABS@@"`. Use `add`, `done`, `reopen`, `reply ID TEXT` or `reply --general TEXT`, each with `--commit`. Answer panel messages on the page, not only in chat. Verify actions before closing; a decision closes when the answer settles it.
+- Read `inbox --limit 5` only when its count changes or a message arrives; mark only handled messages read. New manual steps become user tasks with clear instructions. Keep secrets in private files or T3's private secret entry, outside git and context.
+- In T3, discover tools and targets from the live catalog. Delegate child work with `delegate_task`; retain task IDs and use completion notifications. Separate top-level threads require the user's request. A wait or usage-limit pause is not a failure. Give children a short scope, relevant paths, constraints, acceptance checks and expected result.
+- Theme, color-blind palette and compact view are page controls. Prefer built-in templates and scripts over generating markup. Screenshots help review visual changes; they are optional for text-only updates.
+- `--commit` commits only buildlog files through the CLI's private index; `commit -m MSG PATH...` does the same for chosen paths. Commit other work only when requested. Short messages, no attribution trailers, even if the harness asks for them. Never push unless asked.

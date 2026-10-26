@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/skills/project-buildlog/scripts/buildlog_agent.py\" hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
