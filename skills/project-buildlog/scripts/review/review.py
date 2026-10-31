@@ -746,13 +746,18 @@ def newer_elsewhere(path):
     """Commits on other branches that touch `path` and are not in this checkout: [(short, branch, when, subject)].
     This is how a rewrite that sits on an unmerged branch gets noticed before the old copy is published."""
     out = []
-    for line in git_out(["log", "--all", "--not", "HEAD", "-n", "5", "--format=%h%x09%cr%x09%s", "--", path]).splitlines():
+    here = git_out(["hash-object", "--", path]).strip()
+    for line in git_out(["log", "--branches", "--remotes", "--no-merges", "--not", "HEAD", "-n", "5",
+                         "--format=%h%x09%cr%x09%s", "--", path]).splitlines():
         short, _, rest = line.partition("\t")
         when, _, subject = rest.partition("\t")
-        branches = [b.strip().lstrip("* ").strip() for b in git_out(["branch", "-a", "--contains", short,
-                                                                     "--format=%(refname:short)"]).splitlines() if b.strip()]
-        out.append((short, ", ".join(branches[:3]) + (" +%d more" % (len(branches) - 3) if len(branches) > 3 else ""),
-                    when, subject[:70]))
+        branches = [b.strip() for b in git_out(["branch", "-a", "--contains", short, "--format=%(refname:short)"]).splitlines()
+                    if b.strip() and not b.strip().endswith("/HEAD")]
+        # only branches whose copy of the file differs from this one (a merge or a cherry-pick may already be here)
+        branches = [b for b in branches if git_out(["rev-parse", "--verify", "-q", "%s:%s" % (b, path)]).strip() not in ("", here)]
+        if branches:
+            out.append((short, ", ".join(branches[:3]) + (" +%d more" % (len(branches) - 3) if len(branches) > 3 else ""),
+                        when, subject[:70]))
     return out
 
 
