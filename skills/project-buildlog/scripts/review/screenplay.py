@@ -164,13 +164,13 @@ def render(text):
     if sub:
         out.append("<p class='sp-sub'>%s</p>" % sub)
     out.append("<!--STATS-->")
-    if seg_tags:
-        out.append("<p class='sp-segtags'>%s</p>" % "".join(
-            "<span class='chip seg'><b>%s</b> %s</span>" % (E(k), E(v)) for k, v in seg_tags))
-    for _, t, start in header:
-        if t:
-            out.append("<details class='sp-headnote'><summary>Writer's note</summary><p data-line='%d'>%s</p></details>"
-                       % (start + 1, E(t)))
+    head_notes = [(t, start) for _, t, start in header if t]
+    if seg_tags or head_notes:
+        out.append("<details class='sp-headnote'><summary>%s</summary>%s%s</details>" % (
+            "Writer's note and details" if head_notes and seg_tags else "Writer's note" if head_notes else "Details",
+            "".join("<p data-line='%d'>%s</p>" % (start + 1, E(t)) for t, start in head_notes),
+            "<p class='sp-segtags'>%s</p>" % "".join("<span class='chip seg'><b>%s</b> %s</span>" % (E(k), E(v)) for k, v in seg_tags)
+            if seg_tags else ""))
     out.append("</section>")
 
     block = None
@@ -204,8 +204,8 @@ def render(text):
             sid = "scene-%d" % stats["scenes"]
             scenes.append((sid, e["text"], block["index"] if block else -1))
             num = "<span class='sp-scenenum'>%s</span>" % E(e["number"]) if e.get("number") else ""
-            out.append("<div class='sp-scene' id='%s' data-line='%d'>%s<span class='sp-slug'>%s</span>%s</div>%s"
-                       % (sid, line_no, num, E(e["text"]), _chips(pairs), note_html))
+            out.append("<div class='sp-scene' id='%s' data-n='%s' data-line='%d'>%s<span class='sp-slug'>%s</span>%s</div>%s"
+                       % (sid, E(e.get("number") or str(stats["scenes"]), True), line_no, num, E(e["text"]), _chips(pairs), note_html))
         elif kind == "action":
             is_shot = any(k in shot_tags for k, _ in pairs)
             text_html = E(e["text"]).replace("\n", "<br>")
@@ -277,7 +277,7 @@ def render(text):
                             "<span class='sp-blocktime'>%s &middot; %d line%s</span>" % (fmt_time(b["seconds"]), b["lines"],
                                                                                        "" if b["lines"] == 1 else "s"))
     cast = sorted(stats["characters"].items(), key=lambda kv: (-kv[1], kv[0]))
-    stat_html = ("<div class='sp-stats'><span><b>%s</b> est. runtime</span><span><b>%d</b> lines</span>"
+    stat_html = ("<div class='sp-stats'><span><b>%s</b> est. runtime</span><span><b>%d</b> spoken lines</span>"
                  "<span><b>%d</b> scenes</span><span><b>%d</b> words</span></div>"
                  "<div class='sp-cast' aria-label='Cast: click a name to follow that character'>%s</div>"
                  % (fmt_time(total), stats["lines"], stats["scenes"], stats["words"],
@@ -329,20 +329,25 @@ details.sp-headnote p{margin:0 0 10px}
 .sp-ext,.sp-dual{color:var(--ink2)}
 .sp-paren{margin-left:15ch;max-width:25ch;color:var(--ink2)}
 .sp-line{margin-left:10ch;max-width:35ch}
-.sp-dialogue.caption .sp-line{font-family:var(--font);font-size:15px;line-height:1.4;background:var(--hl);border-radius:6px;padding:3px 8px;max-width:38ch}
+.sp-dialogue.caption .sp-line{border-left:2px solid var(--who);padding-left:1ch;margin-left:9ch}
+.sp-dialogue.caption .sp-line::after{content:" (caption)";color:var(--ink3);font-size:13px}
 .sp-caption-note{display:none;margin:2px 0 2px 10ch;font:12px var(--font);color:var(--ink3)}
 .sp-caption-note.first{display:block}
 .sp-lyric{margin-left:10ch;font-style:italic}
 .sp-transition{text-align:right;text-transform:uppercase;margin:12px 0}
 .sp-centered{text-align:center;margin:14px 0}
-.sp-note{font:13px/1.45 var(--font);color:var(--ink3);margin:-6px 0 12px;padding-left:10px;border-left:2px solid var(--rule)}
+.sp-note{font:12.5px/1.45 var(--font);color:var(--ink3);margin:6px 0 14px;padding:2px 0 2px 10px;border-left:2px solid var(--rule);max-width:52ch}
+.sp-note::before{content:"NOTE  ";font:700 9.5px var(--mono);letter-spacing:1px;color:var(--ink3)}
+body.no-notes .sp-note,body.no-notes .sp-headnote{display:none}
 .sp-dialogue .sp-note{margin-left:10ch}
 .sp-break{border:0;border-top:1px dashed var(--rule);margin:30px 0}
 .atag{color:var(--ink3);font-style:italic;margin-right:3px}
 /* production cues */
 .sp-chips{display:inline-flex;flex-wrap:wrap;gap:4px;margin-left:8px;vertical-align:1px;font-family:var(--font)}
+.sp-cue .sp-chips{display:flex;margin:1px 0 2px;text-transform:none;opacity:.85}
+.sp-scene .sp-chips{font-weight:400}
 .sp-shot .sp-chips,.sp-action .sp-chips{display:flex;margin:4px 0 0}
-body.no-cues .sp-chips,body.no-cues .sp-segtags,body.no-cues .sp-shotlabel{display:none}
+body.no-cues .sp-chips,body.no-cues .sp-shotlabel{display:none}
 body.no-cues .sp-shot{border-left:0;padding:0}
 .chip{display:inline-flex;align-items:center;gap:4px;font:500 11px var(--mono);text-transform:none;letter-spacing:0;padding:0 7px;border-radius:99px;border:1px solid var(--rule);color:var(--ink2);background:transparent;white-space:nowrap;max-width:44ch;overflow:hidden;text-overflow:ellipsis;font-weight:500}
 .chip b{font-weight:700;letter-spacing:.6px;text-transform:uppercase;font-size:9.5px;color:var(--ink3)}
@@ -352,14 +357,14 @@ body.numbers .sp-page [data-line]{position:relative}
 body.numbers .sp-page [data-line]::before{content:attr(data-line);position:absolute;left:calc(-6ch - var(--indent, 0ch));width:4ch;text-align:right;
   font:400 16px/1.25 'Courier Prime','Courier New',Courier,monospace;color:var(--ink3);opacity:.75;text-transform:none;background:none}
 body.numbers .sp-cue{--indent:20ch}body.numbers .sp-line,body.numbers .sp-lyric{--indent:10ch}body.numbers .sp-paren{--indent:15ch}
-body.numbers .sp-dialogue.caption .sp-line::before{top:3px}
+body.numbers .sp-dialogue.caption .sp-line{--indent:calc(9ch + 2px)}
 /* filters */
 body.filtering .dim{opacity:.28}
 body.filtering .sp-dialogue.match .sp-line{background:var(--hl)}
-body.filter-hide .dim{display:none}
+body.filter-hide .dim,body.filter-hide .sp-block.empty{display:none}
 /* comments on the page */
 body.script .commentable:hover{background:var(--hl)!important;box-shadow:none!important}
-body.script .commentable.has-thread{background:linear-gradient(90deg,rgba(245,185,66,.18),transparent 70%);box-shadow:none}
+body.script .commentable.has-thread{background:none;box-shadow:none;text-decoration:underline wavy rgba(214,140,20,.55);text-decoration-skip-ink:none;text-underline-offset:4px}
 body.script .commentable.has-thread.all-resolved{background:none}
 body.script .commentable.is-target,body.script .commentable.flash{background:var(--hl)!important;box-shadow:none!important}
 body.script .marker{right:-2ch}
@@ -397,11 +402,12 @@ def render_page(text, title=None, ctx=None, doc_rel="", source_note=""):
         if toc_rows else ""
     tools = ("<div class='filters'><select class='tbtn' id='f-who' aria-label='Follow one character'><option value=''>All characters</option>%s</select>"
              "<select class='tbtn' id='f-block' aria-label='Show one block'><option value=''>Whole script</option>%s</select>"
-             "<button type='button' class='tbtn' id='f-only' aria-pressed='false' title='Hide what the filter does not match'>Hide others</button>"
-             "<span class='count' id='f-count'></span></div>"
-             "<button type='button' class='tbtn' data-pref='paper' aria-pressed='true' title='Paper or dark page'>Paper</button>"
-             "<button type='button' class='tbtn' data-pref='cues' aria-pressed='true' title='Camera, sound and graphic cues'>Cues</button>"
-             "<button type='button' class='tbtn' data-pref='numbers' aria-pressed='false' title='Source line numbers'>#</button>"
+             "<button type='button' class='tbtn' id='f-only' aria-pressed='false' title='Hide everything the filter does not match'>Only matches</button>"
+             "<span class='count' id='f-count'></span></div><span class='grow'></span>"
+             "<button type='button' class='tbtn' data-pref='paper' aria-pressed='true' title='Paper or dark page'>Paper page</button>"
+             "<button type='button' class='tbtn' data-pref='cues' aria-pressed='true' title='Camera, graphic, sound and music cues'>Production cues</button>"
+             "<button type='button' class='tbtn' data-pref='notes' aria-pressed='true' title=\"Writers' notes and fact checks\">Notes</button>"
+             "<button type='button' class='tbtn' data-pref='numbers' aria-pressed='false' title='Source line numbers (comments are anchored to them)'>Line numbers</button>"
              % ("".join("<option value='%s'>%s</option>" % (E(c, True), E(c)) for c in r["cast"]),
                 "".join("<option value='%s'>%d. %s</option>" % (hid, k + 1, E(t)) for k, (t, hid, _) in enumerate(r["toc"]))))
     body = "<div class='sp-page'>%s</div>" % r["html"]

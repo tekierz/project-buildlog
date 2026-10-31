@@ -299,14 +299,18 @@ PAGE_CSS = """
 :root{color-scheme:dark;--bg:#0b0c0e;--panel:#121316;--panel2:#191b1f;--raise:#22252a;--line:rgba(255,255,255,.09);--line-strong:rgba(255,255,255,.16);
 --text:#f2f3f5;--text2:#c3c7ce;--muted:#8a9099;--accent:#2dd4bf;--accent-fg:#06201c;--accent-soft:rgba(45,212,191,.12);--info:#8fb3ff;--good:#4ade80;--warn:#f5b942;--bad:#ff6b6b;
 --font:'Inter Variable',Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;--mono:ui-monospace,'Cascadia Code','JetBrains Mono',Menlo,Consolas,monospace;--top:58px}
+body.script{--top:96px}
 *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:calc(var(--top) + 24px)}
 body{margin:0;background:var(--bg);color:var(--text);font:17px/1.6 var(--font);-webkit-font-smoothing:antialiased}
 a{color:var(--info)}a:hover{color:var(--accent)}
 [hidden]{display:none!important}
-header.top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;min-height:var(--top);padding:8px 20px;
-  background:rgba(11,12,14,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
-.crumbs{display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 440px;font-size:14px;color:var(--muted);white-space:nowrap}
-.crumbs a{color:var(--text2);text-decoration:none;padding:4px 8px;border-radius:7px;overflow:hidden;text-overflow:ellipsis;max-width:34ch}
+header.top{position:sticky;top:0;z-index:30;background:rgba(11,12,14,.94);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+header.top .row1{display:flex;align-items:center;gap:8px 14px;min-height:50px;padding:6px 20px}
+header.top .subbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 20px 8px}
+@media (max-width:760px){header.top .row1{padding:6px 10px}header.top .subbar{flex-wrap:nowrap;overflow-x:auto;padding:0 10px 8px;scrollbar-width:none}
+  header.top .subbar > *{flex:0 0 auto}.crumbs .mid{display:none}.crumbs .mid + .sep{display:none}}
+.crumbs{display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 auto;font-size:14px;color:var(--muted);white-space:nowrap}
+.crumbs a{color:var(--text2);text-decoration:none;padding:4px 8px;border-radius:7px;overflow:hidden;text-overflow:ellipsis;max-width:46ch;flex:0 1 auto;min-width:4ch}
 .crumbs a:hover{background:var(--panel2);color:var(--text)}
 .crumbs .sep{color:var(--muted);opacity:.7}
 .crumbs .here{color:var(--text);font-weight:650;overflow:hidden;text-overflow:ellipsis;padding:4px 2px}
@@ -317,6 +321,7 @@ header.top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:
 .tbtn[aria-pressed=true]{background:var(--accent-soft);border-color:rgba(45,212,191,.45);color:var(--text)}
 .tbtn .n{font:700 11px var(--mono);background:var(--accent);color:var(--accent-fg);border-radius:99px;padding:0 6px}
 .tbtn .n.zero{background:var(--raise);color:var(--muted)}
+.subbar .grow{flex:1}.subbar .count{font:12.5px var(--font);color:var(--muted);padding:0 4px}
 select.tbtn{appearance:auto;max-width:190px}
 body.framed .only-top{display:none}body:not(.framed) .only-framed{display:none}
 .layout{max-width:1500px;margin:0 auto;padding:22px;display:grid;grid-template-columns:230px minmax(0,1fr) 340px;gap:24px;align-items:start}
@@ -398,13 +403,14 @@ tr .marker{position:static;transform:none;margin-left:6px}
 .ri{display:block;width:100%;text-align:left;background:none;border:1px solid transparent;border-radius:9px;padding:8px 10px;color:var(--text);cursor:pointer;font:inherit}
 .ri:hover{background:var(--panel2);border-color:var(--line)}
 .ri.current{border-color:var(--accent);background:var(--accent-soft)}
-.ri .where{display:flex;gap:6px;align-items:center;font:600 11.5px var(--mono);color:var(--muted)}
+.ri .where{display:flex;gap:6px;align-items:center;font:600 12px var(--font);color:var(--muted)}
 .ri .where .ln{color:var(--text2)}.ri .where .grow{flex:1}
 .ri .ok{color:var(--good)}.ri .open{color:var(--warn)}
 .ri .ex{color:var(--muted);font-size:12.5px;font-style:italic;margin:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ri .first{font-size:14px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .ri .meta{color:var(--muted);font-size:12px;margin-top:2px}
-.ri .gone{color:var(--warn);font-size:11.5px}
+.ri .gone{color:var(--warn);font-size:11.5px;font-family:var(--font)}
+.media-chip{display:inline-block;font:600 12.5px var(--mono);background:var(--panel);border:1px solid var(--line-strong);border-radius:99px;padding:0 8px;text-decoration:none;margin:0 2px}
 .rail-empty{color:var(--muted);padding:18px 14px;font-size:14px;line-height:1.5}
 .rail-help{color:var(--muted);font-size:12.5px;padding:8px 14px 14px;border-top:1px solid var(--line);line-height:1.6}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line-strong);border-radius:10px;padding:8px 14px;font-size:14px;z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.4)}
@@ -457,15 +463,17 @@ DOC_JS = r"""
   try { prefs = JSON.parse(localStorage.getItem(PREF_KEY) || '{}') || {}; } catch (e) {}
   function applyPrefs() {
     B.classList.toggle('dark-page', !!prefs.dark); B.classList.toggle('no-cues', !!prefs.noCues); B.classList.toggle('numbers', !!prefs.numbers);
+    B.classList.toggle('no-notes', !!prefs.noNotes);
     document.querySelectorAll('[data-pref]').forEach(function (b) {
-      var k = b.getAttribute('data-pref'), on = k === 'paper' ? !prefs.dark : k === 'cues' ? !prefs.noCues : !!prefs[k];
+      var k = b.getAttribute('data-pref'), on = k === 'paper' ? !prefs.dark : k === 'cues' ? !prefs.noCues : k === 'notes' ? !prefs.noNotes : !!prefs[k];
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (k === 'paper') b.textContent = prefs.dark ? 'Dark page' : 'Paper page';
     });
   }
   document.querySelectorAll('[data-pref]').forEach(function (b) {
     b.addEventListener('click', function () {
       var k = b.getAttribute('data-pref');
-      if (k === 'paper') prefs.dark = !prefs.dark; else if (k === 'cues') prefs.noCues = !prefs.noCues; else prefs[k] = !prefs[k];
+      if (k === 'paper') prefs.dark = !prefs.dark; else if (k === 'cues') prefs.noCues = !prefs.noCues; else if (k === 'notes') prefs.noNotes = !prefs.noNotes; else prefs[k] = !prefs[k];
       try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) {}
       applyPrefs();
     });
@@ -484,9 +492,10 @@ DOC_JS = r"""
       d.classList.toggle('match', !!w && match); d.classList.toggle('dim', !match);
       if (w && match && !(d.closest('.sp-block') || d).classList.contains('off')) shown += d.querySelectorAll('.sp-line').length;
     });
-    document.querySelectorAll('.sp-action,.sp-shot,.sp-scene,.sp-transition,.sp-centered').forEach(function (x) { x.classList.toggle('dim', !!w); });
+    document.querySelectorAll('.sp-action,.sp-shot,.sp-scene,.sp-transition,.sp-centered,.sp-note').forEach(function (x) { x.classList.toggle('dim', !!w && !x.closest('.match')); });
+    document.querySelectorAll('.sp-block').forEach(function (s) { s.classList.toggle('empty', !!w && !s.querySelector('.sp-dialogue.match')); });
     document.querySelectorAll('.cast-chip').forEach(function (c) { c.setAttribute('aria-pressed', c.getAttribute('data-who') === w ? 'true' : 'false'); });
-    var cnt = document.getElementById('f-count'); if (cnt) cnt.textContent = w ? shown + ' line' + (shown === 1 ? '' : 's') : '';
+    var cnt = document.getElementById('f-count'); if (cnt) cnt.textContent = w ? w + ': ' + shown + ' line' + (shown === 1 ? '' : 's') : '';
     if (b) { var target = document.getElementById(b); if (target) target.scrollIntoView({block: 'start'}); }
   }
   if (who) who.addEventListener('change', applyFilter);
@@ -507,7 +516,7 @@ DOC_JS = r"""
     if (e.getAttribute('data-excerpt')) return e.getAttribute('data-excerpt');
     var c = e.cloneNode(true);
     c.querySelectorAll('audio,video,button,.th,.marker,.sp-chips,.chip,.anchor,input').forEach(function (x) { x.remove(); });
-    if (c.tagName === 'TR') return Array.prototype.map.call(c.children, function (td) { return td.textContent.replace(/\s+/g, ' ').trim(); }).filter(Boolean).join(' | ').slice(0, 140);
+    if (c.tagName === 'TR') return Array.prototype.map.call(c.children, function (td) { return td.textContent.replace(/\s+/g, ' ').trim(); }).filter(Boolean).join(' · ').slice(0, 140);
     return c.textContent.replace(/\s+/g, ' ').trim().slice(0, 140);
   }
   function kindOf(e) {
@@ -546,10 +555,30 @@ DOC_JS = r"""
     });
     order = Object.keys(threads).map(function (k) { return threads[k]; }).sort(function (a, b) { return a.line - b.line; });
   }
+  function linked(text) {
+    var out = [], re = /https?:\/\/[^\s<>"')\]]+/g, last = 0, m;
+    text = String(text || '');
+    while ((m = re.exec(text))) {
+      var u = m[0].replace(/[.,;:!?]+$/, ''), local = null;
+      out.push(text.slice(last, m.index)); last = m.index + u.length;
+      try { var pu = new URL(u); if (pu.hostname === location.hostname && /\.(mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg|oga|opus|flac|png|jpe?g|gif|webp)$/i.test(pu.pathname)) local = pu.pathname; } catch (e) {}
+      if (!local) { out.push(el('a', {href: u, target: '_blank', rel: 'noopener', text: u})); continue; }
+      var a = el('a', {href: local, class: 'media-chip', text: '▶ ' + decodeURIComponent(local.split('/').pop())});
+      a.addEventListener('click', (function (href, link) { return function (ev) {
+        ev.preventDefault(); var next = link.nextElementSibling;
+        if (next && next.classList.contains('inline-media')) { next.remove(); return; }
+        var v = /\.(mp4|webm|mov|m4v)$/i.test(href), au = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i.test(href);
+        link.insertAdjacentElement('afterend', el('div', {class: 'inline-media'}, [v ? el('video', {src: href, controls: true, autoplay: true}) : au ? el('audio', {src: href, controls: true, autoplay: true}) : el('img', {src: href})]));
+      }; })(local, a));
+      out.push(a);
+    }
+    out.push(text.slice(last));
+    return out;
+  }
   function msgEl(m) {
     var dec = m.decision && m.decision !== 'comment' ? el('span', {class: 'dec', text: m.decision.replace('_', ' ')}) : null;
     return el('div', {class: 'm ' + m.who}, [el('span', {class: 'who', text: m.who === 'you' ? 'You' : 'Orchestrator'}), el('time', {text: when(m.at)}),
-      el('div', {class: 'txt'}, [dec, m.text || ''])]);
+      el('div', {class: 'txt'}, [dec].concat(linked(m.text)))]);
   }
   function placeBox(e, box) {
     if (e.tagName === 'TR') { var tr = el('tr', {class: 'th-tr'}, [el('td', {colspan: e.children.length || 1}, [box])]); e.insertAdjacentElement('afterend', tr); return tr; }
@@ -570,6 +599,7 @@ DOC_JS = r"""
     clearInline();
     order.forEach(function (t) {
       var e = lineEls[t.line]; if (!e) return;
+      if (!t.msgs.length) { if (t.open || t.draft) placeBox(e, threadBox(t)); return; }      // a comment not sent yet
       e.classList.add('has-thread'); e.classList.toggle('all-resolved', t.resolved);
       var mk = el('button', {type: 'button', class: 'marker' + (t.resolved ? ' ok' : ''), title: (t.resolved ? 'Resolved: ' : 'Open: ') + t.msgs.length + ' comment(s)', text: (t.resolved ? '✓ ' : '💬 ') + t.msgs.length});
       mk.addEventListener('click', function (ev) { ev.stopPropagation(); t.open = !t.open; renderInline(); renderRail(); });
@@ -619,28 +649,45 @@ DOC_JS = r"""
     if (t.focus) { setTimeout(function () { ta.focus(); }, 0); delete t.focus; }
     return box;
   }
-  function counts() { var o = 0, r = 0; order.forEach(function (t) { if (t.resolved) r++; else o++; }); return {open: o, resolved: r, all: o + r}; }
+  function real() { return order.filter(function (t) { return t.msgs.length; }); }
+  function counts() { var o = 0, r = 0; real().forEach(function (t) { if (t.resolved) r++; else o++; }); return {open: o, resolved: r, all: o + r}; }
   function renderRail() {
     var list = document.getElementById('rail-list'); if (!list) return;
     var c = counts();
     ['open', 'resolved', 'all'].forEach(function (k) { var b = document.querySelector('[data-rail="' + k + '"]'); if (b) { b.setAttribute('aria-pressed', filter === k ? 'true' : 'false'); b.querySelector('b').textContent = c[k]; } });
     var n = document.getElementById('c-count'); if (n) { n.textContent = c.open; n.classList.toggle('zero', !c.open); }
     list.textContent = '';
-    var shown = order.filter(function (t) { return filter === 'all' || (filter === 'open') !== t.resolved; });
+    var shown = real().filter(function (t) { return filter === 'all' || (filter === 'open') !== t.resolved; });
     if (!shown.length) {
       list.appendChild(el('div', {class: 'rail-empty', text: !(LIVE && ITEM) ? 'Comments show on the live page.' : c.all ? 'Nothing ' + filter + '.' : 'No comments yet. Click any line to start a thread.'}));
     }
     shown.forEach(function (t) {
-      var first = t.msgs[0] || {}, last = t.msgs[t.msgs.length - 1] || {};
-      var b = el('button', {type: 'button', class: 'ri' + (current === t ? ' current' : '')}, [
-        el('div', {class: 'where'}, [el('span', {class: 'ln', text: 'L' + t.line}), el('span', {class: 'grow'}), lineEls[t.line] ? (edited(t) ? el('span', {class: 'gone', text: 'changed'}) : null) : el('span', {class: 'gone', text: 'line gone'}),
+      var first = t.msgs[0] || {}, last = t.msgs[t.msgs.length - 1] || {}, e = lineEls[t.line];
+      var b = el('button', {type: 'button', class: 'ri' + (current === t ? ' current' : ''), title: 'Source line ' + t.line}, [
+        el('div', {class: 'where'}, [el('span', {class: 'ln', text: where(t)}), el('span', {class: 'grow'}), e ? (edited(t) ? el('span', {class: 'gone', text: 'edited since'}) : null) : el('span', {class: 'gone', text: 'line removed'}),
           el('span', {class: t.resolved ? 'ok' : 'open', text: t.resolved ? '✓ resolved' : 'open'})]),
-        t.excerpt ? el('div', {class: 'ex', text: t.excerpt}) : null,
+        el('div', {class: 'ex', text: e ? about(e) : t.excerpt}),
         el('div', {class: 'first', text: first.text || ''}),
         el('div', {class: 'meta', text: t.msgs.length + ' message' + (t.msgs.length === 1 ? '' : 's') + ' · last ' + (last.who === 'agent' ? 'orchestrator' : 'you') + ', ' + when(last.at)})]);
       b.addEventListener('click', function () { go(t); });
       list.appendChild(b);
     });
+  }
+  /* "Scene 4 · COACH STU" for scripts, the heading above for documents */
+  function where(t) {
+    var e = lineEls[t.line]; if (!e) return 'Line ' + t.line;
+    if (e.classList.contains('sp-blockhead')) return 'Block ' + ((e.querySelector('.sp-blocknum') || {}).textContent || '') + ' · ' + ((e.querySelector('.sp-blocktitle') || {}).textContent || '');
+    var all = Array.prototype.slice.call(document.querySelectorAll(B.classList.contains('script') ? '.sp-scene' : 'article h2, article h3'));
+    var scene = null;
+    all.forEach(function (s) { if (s.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING || s === e) scene = s; });
+    var who = e.getAttribute('data-who') || (e.closest('[data-who]') || {getAttribute: function () { return ''; }}).getAttribute('data-who');
+    if (scene && scene.classList.contains('sp-scene')) return 'Scene ' + (scene.getAttribute('data-n') || '?') + (who ? ' · ' + who : '');
+    return scene ? scene.textContent.replace(/#$/, '').trim().slice(0, 40) : 'Line ' + t.line;
+  }
+  function about(e) {
+    if (e.classList.contains('sp-blockhead')) return (e.querySelector('.sp-blocktitle') || e).textContent;
+    if (e.classList.contains('sp-cue')) { var first = e.parentNode.querySelector('.sp-line'); if (first) return cleanText(first); }
+    return cleanText(e);
   }
   function go(t) {
     current = t; t.open = true; renderInline(); renderRail();
@@ -673,7 +720,7 @@ DOC_JS = r"""
       var t = threads[tkey(n)];
       tell({type: 'review-line', line: Number(n)});
       if (!(LIVE && ITEM)) { if (!t) toast('Open the live page to comment.'); }
-      if (!t) { t = thread(n, {excerpt: cleanText(e)}); t.draft = ' '; }
+      if (!t) { t = thread(n, {excerpt: cleanText(e)}); t.draft = ' '; order.push(t); order.sort(function (a, b) { return a.line - b.line; }); }
       t.open = true; t.focus = true; current = t;
       renderInline(); renderRail();
     });
@@ -685,7 +732,7 @@ DOC_JS = r"""
     if (tag === 'textarea' || tag === 'input' || tag === 'select' || ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if (ev.key === 'Escape') { if (FRAMED) tell({type: 'review-nav', to: 'item'}); return; }
     if (ev.key !== 'j' && ev.key !== 'k') return;
-    var list = order.filter(function (t) { return filter === 'all' || (filter === 'open') !== t.resolved; });
+    var list = real().filter(function (t) { return filter === 'all' || (filter === 'open') !== t.resolved; });
     if (!list.length) return;
     var i = list.indexOf(current); i = ev.key === 'j' ? Math.min(list.length - 1, i + 1) : Math.max(0, i < 0 ? 0 : i - 1);
     go(list[i]);
@@ -733,10 +780,10 @@ def page_shell(title, body_html, ctx=None, doc_rel="", toc_html="", tools_html="
     item_id = ctx.get("item_id") or ""
     item_href = hub + ("#item=" + E(item_id, True) if item_id else "")
     crumbs = ("<nav class='crumbs' aria-label='Breadcrumb'><a href='%s' data-nav='hub' target='_top'><span class='brand'>%s</span>&nbsp;review</a>"
-              "<span class='sep'>&rsaquo;</span><a id='crumb-item' href='%s' data-nav='item' target='_top' title='Back to the item'>%s</a>"
+              "<span class='sep'>&rsaquo;</span><a id='crumb-item' class='mid' href='%s' data-nav='item' target='_top' title='Back to the item'>%s</a>"
               "<span class='sep'>&rsaquo;</span><span class='here' title='%s'>%s</span></nav>"
               % (E(hub, True), E(ctx.get("brand") or "Project"), item_href, E(ctx.get("item_title") or ""), E(title, True), E(title)))
-    tools = tools_html
+    tools = ""
     if comments:
         tools += ("<button type='button' class='tbtn' id='rail-toggle' aria-pressed='true' title='Show or hide the comments'>"
                   "Comments <span class='n zero' id='c-count'>0</span></button>")
@@ -754,10 +801,11 @@ def page_shell(title, body_html, ctx=None, doc_rel="", toc_html="", tools_html="
     return ("<!doctype html>\n<html lang='en'>\n<head>\n<meta charset='utf-8'>\n"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>\n<title>%s</title>\n"
             "<style>%s%s%s</style>\n</head>\n<body class='%s%s' data-item='%s' data-doc='%s'>\n"
-            "<header class='top'>%s<div class='tools'>%s</div></header>\n"
+            "<header class='top'><div class='row1'>%s<div class='tools'>%s</div></div>%s</header>\n"
             "<div class='%s'>%s<article class='doc'>%s%s</article>%s</div>\n<script>%s</script>\n</body>\n</html>\n"
             % (E(title), PAGE_CSS, COMMENT_CSS, extra_css, E(body_class, True), "" if comments else " rail-off",
-               E(item_id, True), E(doc_rel, True), crumbs, tools, layout, toc_html, body_html, foot, rail, DOC_JS))
+               E(item_id, True), E(doc_rel, True), crumbs, tools,
+               "<div class='subbar'>%s</div>" % tools_html if tools_html else "", layout, toc_html, body_html, foot, rail, DOC_JS))
 
 
 def render_page(text, title=None, resolve=None, ctx=None, doc_rel="", source_note="", comments=True):
