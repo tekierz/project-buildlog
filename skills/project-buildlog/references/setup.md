@@ -18,6 +18,7 @@ Useful options:
 - `--service-manager systemd|schtasks|none`: systemd user service (Linux default), per-user logon Scheduled Task started with `pythonw` (Windows default; logs in `~/.local/state/<name>/server.log`), or none (init starts the server once; Windows also gets `tools/buildlog/start-server.cmd`).
 - `--sections current,goals,cards,modules,timeline`: optional sections; tasks and updated stay.
 - `--rules-doc AGENTS.md --rules-doc CLAUDE.md`: instruction entry points, also the default.
+- `--review-hub`: also install the review hub (see [review-hub.md](review-hub.md)); later reruns keep it.
 - `--commit`: only when the user requested a commit. No push.
 - `--force`: replaces the page; only use when replacing it is intended.
 

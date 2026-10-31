@@ -51,6 +51,7 @@ SCRIPTS = SKILL / "scripts"
 TEMPLATES = SKILL / "templates"
 COPY_SCRIPTS = ("buildlog_server.py", "buildlog_tasks.py", "buildlog_progress.py", "buildlog_agent.py")
 COPY_TESTS = ("test_buildlog_server.py", "test_buildlog_progress.py", "test_buildlog_agent.py")
+REVIEW_FILES = ("review.py", "md_render.py", "screenplay.py", "screenmark.py")    # scripts/review -> <tools>/review
 SECTIONS = ("current", "goals", "cards", "modules", "timeline")
 EVENT = "buildlog_message"
 GUARD_START = "# project-buildlog: private and local-only files (never commit these)"
@@ -547,6 +548,7 @@ def cmd_init(args):
     args.sections = args.sections if args.sections is not None else ",".join(old.get("sections", SECTIONS))
     args.evidence_dir = args.evidence_dir or old.get("evidence_dirs", ["docs/evidence"])[0]
     args.delivery = args.delivery or "webhook"
+    review_hub = bool(args.review_hub or old.get("review_hub"))
     title = args.title or old.get("title") or project.name
     slug = slugify(args.slug or old.get("slug") or project.name)
     name = args.name or old.get("name") or "%s-buildlog" % slug
@@ -576,6 +578,13 @@ def cmd_init(args):
     }
     if manager != "systemd":
         settings["service_manager"] = manager
+    if review_hub:
+        settings["review_hub"] = True
+        for key in ("review_items", "review_page", "review"):
+            if key in old:
+                settings[key] = old[key]
+        settings.setdefault("review_items", "docs/review/items.json")
+        settings.setdefault("review_page", "docs/review/index.html")
     if any(homes.values()):
         settings["_homes"] = {k: v for k, v in homes.items() if v}
     ctx = Ctx(project, settings, homes)
@@ -603,6 +612,8 @@ def cmd_init(args):
     stored = {k: v for k, v in settings.items()}
     write_atomic(sp, json.dumps(stored, indent=2) + "\n")
     ok("copied %s and tests/; wrote %s" % (", ".join(COPY_SCRIPTS), sp.relative_to(project)))
+    if review_hub:
+        install_review_hub(ctx)
 
     step("3. Write the page")
     if ctx.page.exists() and not args.force:
@@ -729,6 +740,8 @@ def cmd_init(args):
     if args.commit:
         step("9. Commit the new files (private index)")
         paths = [args.tools_dir, args.page, settings["tasks"], rules_rel, ".gitignore"] + rules_docs
+        if review_hub:
+            paths.append(str(Path(settings["review_page"]).parent))
         r = run([sys.executable, "-I", str(ctx.cli), "commit", "-m", "buildlog: build log and Your tasks panel"] + paths)
         if r.returncode != 0:
             fail("commit failed: %s" % r.stderr.strip(), fatal=False)
@@ -814,10 +827,30 @@ def shared_rules_rel(ctx):
     return str(Path(ctx.page_rel).with_name("buildlog-agent.md"))
 
 
+def install_review_hub(ctx):
+    """The optional review hub: review/ scripts and page template into <tools>/review/, its test, then a first sync."""
+    dest = ctx.tools / "review"
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in REVIEW_FILES:
+        shutil.copy2(SCRIPTS / "review" / f, dest / f)
+    os.chmod(dest / "review.py", 0o755)
+    shutil.copy2(TEMPLATES / "review-hub.html", dest / "hub_template.html")
+    shutil.copy2(SCRIPTS / "tests" / "test_review.py", ctx.tools / "tests" / "test_review.py")
+    r = run([sys.executable, "-I", str(dest / "review.py"), "sync"], cwd=ctx.root)
+    if r.returncode != 0:
+        fail("review.py sync failed: %s" % (r.stderr or r.stdout).strip())
+    ok("review hub: %s/review/ and %s (http://127.0.0.1:%d/%s)"
+       % (ctx.tools_rel, ctx.s["review_page"], ctx.port, ctx.s["review_page"]))
+
+
 def write_rules(ctx):
     """Write the shared rules beside the page and a small managed block in each entry point."""
     rel = shared_rules_rel(ctx)
     rules = render((TEMPLATES / "agent-rules.md").read_text(encoding="utf-8"), dict(ctx.values(), PROJECT=ctx.s["title"]), "rules")
+    if ctx.s.get("review_hub"):
+        rules = rules.rstrip("\n") + "\n" + render((TEMPLATES / "review-rules.md").read_text(encoding="utf-8"), dict(
+            ctx.values(), REVIEW_URL="http://127.0.0.1:%d/%s" % (ctx.port, ctx.s.get("review_page", "docs/review/index.html")),
+            REVIEW_CLI_ABS=str(ctx.tools / "review" / "review.py")), "review rules")
     write_atomic(ctx.root / rel, rules)
     snippet = ('%s\nBuild log: %s. Read `%s` when handling buildlog work.\n'
                'Start with `%s -I "%s" brief`; details only as needed.\n%s\n' %
@@ -996,7 +1029,9 @@ def restart_server(ctx):
 
 def print_next_steps(ctx, cfg):
     if cfg.get("delivery") == "local":
-        print("\nLocal inbox ready. Read: python3 -I %s inbox --limit 5\nPage: %s" % (shell_quote(str(ctx.cli)), ctx.live_url))
+        print("\nLocal inbox ready. Read: %s -I %s inbox --limit 5\nPage: %s" % (PY, shell_quote(str(ctx.cli)), ctx.live_url))
+        if ctx.s.get("review_hub"):
+            print("Review hub: http://127.0.0.1:%d/%s" % (ctx.port, ctx.s.get("review_page", "docs/review/index.html")))
         return
     a = ctx.config_dir / "t3-webhook-task.json"
     b = ctx.config_dir / "t3-heartbeat-task.json"
@@ -1358,6 +1393,8 @@ def main(argv=None):
     p.add_argument("--no-service", action="store_true", help="do not install or start the service this time")
     p.add_argument("--commit", action="store_true", help="commit the new files through a private index")
     p.add_argument("--force", action="store_true", help="replace an existing page")
+    p.add_argument("--review-hub", action="store_true",
+                   help="also install the review hub (items to approve, decide or comment on; kept on later reruns)")
     p = common(sub.add_parser("set-url", help="store the webhook URL, read from stdin"))
     p.add_argument("--url-file", help="read the URL from this file instead of stdin")
     p.add_argument("--keep-args", action="store_true", help="keep the schedule_task argument file")

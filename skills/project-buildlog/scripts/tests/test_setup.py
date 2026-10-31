@@ -191,6 +191,32 @@ class SetupTests(unittest.TestCase):
         self.assertEqual((self.proj / "CLAUDE.md").read_text(encoding="utf-8"), "# Claude rules\nKeep replies brief.\n")
         self.assertFalse((self.proj / "AGENTS.md").exists())
 
+    def test_review_hub_is_optional_and_kept_on_reruns(self):
+        self.setup("init", "--project", str(self.proj), "--no-service", "--delivery", "local", "--seed", "none", *self.homes)
+        self.assertFalse((self.proj / "tools/buildlog/review").exists())
+        self.assertNotIn("## Review hub", (self.proj / "docs/buildlog-agent.md").read_text(encoding="utf-8"))
+        out = self.setup("init", "--project", str(self.proj), "--no-service", "--review-hub", *self.homes).stdout
+        self.assertIn("review hub:", out)
+        for f in ("review.py", "md_render.py", "screenplay.py", "screenmark.py", "hub_template.html"):
+            self.assertTrue((self.proj / "tools/buildlog/review" / f).is_file(), f)
+        self.assertTrue((self.proj / "tools/buildlog/tests/test_review.py").is_file())
+        hub = (self.proj / "docs/review/index.html").read_text(encoding="utf-8")
+        self.assertIn('id="items-snapshot"', hub)
+        rules = (self.proj / "docs/buildlog-agent.md").read_text(encoding="utf-8")
+        self.assertIn("## Review hub", rules)
+        self.assertIn(str(self.proj / "tools/buildlog/review/review.py"), rules)
+        self.assertNotIn("@@", rules)
+        self.setup("init", "--project", str(self.proj), "--no-service", *self.homes)        # a plain rerun keeps it
+        settings = json.loads((self.proj / "tools/buildlog/buildlog.json").read_text(encoding="utf-8"))
+        self.assertTrue(settings["review_hub"])
+        self.assertEqual(settings["review_items"], "docs/review/items.json")
+        self.assertIn("## Review hub", (self.proj / "docs/buildlog-agent.md").read_text(encoding="utf-8"))
+        r = subprocess.run([sys.executable, "-I", str(self.proj / "tools/buildlog/review/review.py"), "add", "--id", "hello",
+                            "--kind", "info", "--title", "Hello", "--summary", "The hub works."], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = subprocess.run([sys.executable, "-I", str(self.proj / "tools/buildlog/tests/test_review.py")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+
     def test_refresh_keeps_custom_identity_paths_and_records(self):
         result = self.setup("init", "--project", str(self.proj), "--no-service", "--delivery", "local",
                             "--name", "chosen-log", "--title", "Chosen title", "--page", "site/status.html",

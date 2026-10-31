@@ -11,6 +11,7 @@ Start with `python3 -I /absolute/project/tools/buildlog/buildlog_agent.py brief`
 
 - **New installation or maintenance:** read [setup.md](references/setup.md). Run this skill's `scripts/setup.py init --project DIR` (local delivery without T3). Init copies scripts/templates and writes small entries in both `AGENTS.md` and `CLAUDE.md`; shared rules live beside the page. Preserve user instructions. Do not commit unless requested.
 - **Work, delegation, updates or replies:** read [agent-workflow.md](references/agent-workflow.md). Use `buildlog_agent.py work|note|render`; `buildlog_tasks.py` owns user tasks and replies. Run scripts without loading their source unless debugging them.
+- **Review hub (optional):** for anything the user should look at, decide or comment on (drafts, scripts, renders, takes), read [review-hub.md](references/review-hub.md). `setup.py init --review-hub` installs it; agents use `tools/buildlog/review/review.py add|inbox|reply|resolve|snooze|close`.
 - **Display changes:** the page has saved theme, view and color controls. Use them; no generated CSS or agent turn is needed. `setup.py upgrade-page` adds them to existing pages without replacing project sections.
 - **Host setup or hooks:** read [compatibility.md](references/compatibility.md). Optional startup hooks inject the same bounded brief; explicit CLI calls are the fallback. T3 tools are discovered at runtime.
 - **Failures:** read [troubleshooting.md](references/troubleshooting.md). Read [reference.md](references/reference.md) only for API/schema changes.

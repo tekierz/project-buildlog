@@ -10,6 +10,7 @@ A shared buildlog for Codex and Claude Code, including through T3 Code. The page
 - Agent work records with owners, parent tasks, blockers and actual T3 task IDs. Python renders updates from data.
 - A status brief capped at 2,400 characters by default. Revision checks skip unchanged state; details load on demand.
 - Saved dark, light, system and high contrast themes, cards/compact views, and a color-blind palette. Display changes need no agent call.
+- An optional review hub: approvals, choices, auditions and actions with clips, sounds, images, before/after compares, Markdown and screenplay documents inline. Line and timestamp comment threads, importance, tags, filters, snooze and deep links.
 - Optional startup hook adapters and signed T3 webhook feedback. Local inbox delivery works without T3.
 - A loopback-only server, retry queue, private credential storage and an optional systemd user service (Linux) or logon Scheduled Task (Windows).
 
@@ -63,6 +64,17 @@ python3 -I /path/to/repo/tools/buildlog/buildlog_agent.py render --commit
 
 The [agent workflow](skills/project-buildlog/references/agent-workflow.md) covers bounded JSON/text, revision checks, delegation and message handling. Human tasks and replies use `buildlog_tasks.py`; agent subtasks use `buildlog_agent.py`. `--commit` commits only buildlog files through a private index; nothing is pushed. Full records stay in JSON, outside routine model context.
 
+## Review hub
+
+Add `--review-hub` to `setup.py init` (also on an existing setup) for a second page at `docs/review/index.html` where the user reviews work and answers:
+
+```bash
+python3 -I /path/to/repo/tools/buildlog/review/review.py add --id logo --kind approve --title "New logo"   --summary "Two weights; the bold one reads at 16 px." --priority high --tag brand --media docs/media/logo.png
+python3 -I /path/to/repo/tools/buildlog/review/review.py inbox
+```
+
+Scripts in [ScreenMark](https://github.com/tekierz/screen-mark) (`.screen.md`) render as screenplay review pages with line comment threads. See the [review hub guide](skills/project-buildlog/references/review-hub.md).
+
 Rendering replaces CURRENT, TIMELINE and UPDATED; migrate handwritten content there before using it on an older page. Other sections remain intact. Run `setup.py upgrade-page --project DIR` to add display controls to an older page with a backup.
 
 ## Security and verification
@@ -74,6 +86,7 @@ python3 -I skills/project-buildlog/scripts/tests/test_setup.py
 python3 -I skills/project-buildlog/scripts/tests/test_buildlog_server.py
 python3 -I skills/project-buildlog/scripts/tests/test_buildlog_progress.py
 python3 -I skills/project-buildlog/scripts/tests/test_buildlog_agent.py
+python3 -I skills/project-buildlog/scripts/tests/test_review.py
 claude plugin validate .
 ```
 
