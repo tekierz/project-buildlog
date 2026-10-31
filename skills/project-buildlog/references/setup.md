@@ -14,9 +14,11 @@ python3 -I "$SKILL_DIR/scripts/setup.py" init --project /absolute/project \
 Useful options:
 
 - `--delivery local`: no T3 required; messages wait in the inbox.
-- `--no-service`: skip systemd installation. Run the copied server yourself.
+- `--no-service`: skip service installation. Run the copied server yourself.
+- `--service-manager systemd|schtasks|none`: systemd user service (Linux default), per-user logon Scheduled Task started with `pythonw` (Windows default; logs in `~/.local/state/<name>/server.log`), or none (init starts the server once; Windows also gets `tools/buildlog/start-server.cmd`).
 - `--sections current,goals,cards,modules,timeline`: optional sections; tasks and updated stay.
 - `--rules-doc AGENTS.md --rules-doc CLAUDE.md`: instruction entry points, also the default.
+- `--review-hub`: also install the review hub (see [review-hub.md](review-hub.md)); later reruns keep it.
 - `--commit`: only when the user requested a commit. No push.
 - `--force`: replaces the page; only use when replacing it is intended.
 
@@ -84,6 +86,6 @@ All commands use `python3 -I "$SKILL_DIR/scripts/setup.py" COMMAND --project DIR
 | `rotate-secret` | Generates a new private key and prints the steps: request_secret for the new key, `t3-args --redacted` for the schedule, then `update_scheduled_task` on the retained scheduler ID with the secretRef. Do not read the key-bearing rotation file into context. Verify, then delete it. |
 | `remove [--purge] [--files]` | Stops/removes service. Purge deletes private credentials/state; files deletes generated page, tasks, work state, shared rules, tools and the managed instruction blocks (an instruction file left empty is deleted). Review scope before destructive flags. Delete retained T3 scheduler tasks separately. |
 
-systemd user services stop at logout without linger. `loginctl enable-linger` is optional when persistence across logout is wanted. Without systemd, keep the server running through an appropriate local process manager.
+systemd user services stop at logout without linger. `loginctl enable-linger` is optional when persistence across logout is wanted. Without systemd, keep the server running through an appropriate local process manager. On Windows the logon task plays that role; private files use an access list that admits only your account instead of mode 600.
 
 For payloads or evidence rules read [reference.md](reference.md). For errors read [troubleshooting.md](troubleshooting.md).

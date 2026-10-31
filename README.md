@@ -10,8 +10,9 @@ A shared buildlog for Codex and Claude Code, including through T3 Code. The page
 - Agent work records with owners, parent tasks, blockers and actual T3 task IDs. Python renders updates from data.
 - A status brief capped at 2,400 characters by default. Revision checks skip unchanged state; details load on demand.
 - Saved dark, light, system and high contrast themes, cards/compact views, and a color-blind palette. Display changes need no agent call.
+- An optional review hub: approvals, choices, auditions and actions with clips, sounds, images, before/after compares, Markdown and screenplay documents inline. Line and timestamp comment threads, importance, tags, filters, snooze and deep links.
 - Optional startup hook adapters and signed T3 webhook feedback. Local inbox delivery works without T3.
-- A loopback-only server, retry queue, private credential storage and optional systemd user service.
+- A loopback-only server, retry queue, private credential storage and an optional systemd user service (Linux) or logon Scheduled Task (Windows).
 
 Python standard library only. No package dependencies or model API calls.
 
@@ -48,7 +49,7 @@ python3 -I skills/project-buildlog/scripts/setup.py init --project /path/to/repo
 
 Init writes compact entries to both `AGENTS.md` and `CLAUDE.md`, with shared rules beside the page. Repeat `--rules-doc PATH` to choose entry points. It preserves existing instruction text and does not commit unless `--commit` is supplied.
 
-Requirements: Python 3.10+, Unix file locks, and git for commits/evidence. Linux systemd user services keep the server running; otherwise use `--no-service` and start the copied server yourself. T3 webhook delivery requires remote access. Use `--delivery local` for a local inbox without T3.
+Requirements: Python 3.10+ on Linux, macOS or Windows, and git for commits/evidence. A systemd user service (Linux) or a per-user logon Scheduled Task (Windows, `--service-manager schtasks`, the default there) keeps the server running; otherwise use `--service-manager none` or `--no-service` and start the copied server yourself. On Windows run the scripts with `python` instead of `python3`. T3 webhook delivery requires remote access. Use `--delivery local` for a local inbox without T3.
 
 The [setup guide](skills/project-buildlog/references/setup.md) covers private webhook entry, verification, upgrades and removal. Recurring heartbeats are optional and created only when requested. Hooks supplement delivery; they cannot wake an idle agent, and hook execution in T3 still needs a live provider check.
 
@@ -63,17 +64,31 @@ python3 -I /path/to/repo/tools/buildlog/buildlog_agent.py render --commit
 
 The [agent workflow](skills/project-buildlog/references/agent-workflow.md) covers bounded JSON/text, revision checks, delegation and message handling. Human tasks and replies use `buildlog_tasks.py`; agent subtasks use `buildlog_agent.py`. `--commit` commits only buildlog files through a private index; nothing is pushed. Full records stay in JSON, outside routine model context.
 
+## Review hub
+
+Add `--review-hub` to `setup.py init` (also on an existing setup) for a second page at `docs/review/index.html` where the user reviews work and answers:
+
+```bash
+python3 -I /path/to/repo/tools/buildlog/review/review.py add --id logo --kind approve --title "New logo"   --summary "Two weights; the bold one reads at 16 px." --priority high --tag brand --media docs/media/logo.png
+python3 -I /path/to/repo/tools/buildlog/review/review.py inbox
+```
+
+Scripts in [ScreenMark](https://github.com/tekierz/screen-mark) (`.screen.md`) render as screenplay review pages with line comment threads.
+
+Versions are first-class. `add --supersedes OLD` makes a new version the only card: the old one folds into "Earlier versions" with its comment boxes closed, and its notes carry over ("3 notes from v12, carried over · 2 open"). Line comments are anchored by the line's content, so they follow their line when a document is rewritten. Every note records the version it was made on, and `inbox` flags notes made on an outdated one. Decisions about a document (`--parent ID`) show inside its card. `add` warns before a second open card shows the same document, and `review.py check` finds documents that changed or have newer commits on another branch. See the [review hub guide](skills/project-buildlog/references/review-hub.md).
+
 Rendering replaces CURRENT, TIMELINE and UPDATED; migrate handwritten content there before using it on an older page. Other sections remain intact. Run `setup.py upgrade-page --project DIR` to add display controls to an older page with a backup.
 
 ## Security and verification
 
-The server binds to 127.0.0.1, guards POST requests against cross-site use, and signs webhook messages. The signing key and webhook URL stay outside git in private files. A signed note is treated as the user's words, never as shell code. Use T3 private secret entry and a one-use `secretRef` for scheduling.
+The server binds to 127.0.0.1, guards POST requests against cross-site use, and signs webhook messages. An opt-in `"network": "lan"` setting serves the pages to your Tailscale or home-LAN devices: private ranges only, this machine's host names only, and you still need a firewall rule (see [reference.md](skills/project-buildlog/references/reference.md#opening-the-pages-from-another-device-opt-in)). The signing key and webhook URL stay outside git in private files. A signed note is treated as the user's words, never as shell code. Use T3 private secret entry and a one-use `secretRef` for scheduling.
 
 ```bash
 python3 -I skills/project-buildlog/scripts/tests/test_setup.py
 python3 -I skills/project-buildlog/scripts/tests/test_buildlog_server.py
 python3 -I skills/project-buildlog/scripts/tests/test_buildlog_progress.py
 python3 -I skills/project-buildlog/scripts/tests/test_buildlog_agent.py
+python3 -I skills/project-buildlog/scripts/tests/test_review.py
 claude plugin validate .
 ```
 

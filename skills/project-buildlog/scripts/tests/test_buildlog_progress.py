@@ -66,22 +66,22 @@ ROOTS = ("docs/evidence",)
 
 def make_repo(root, with_evidence=True):
     (root / "parts" / "demo").mkdir(parents=True)
-    (root / "parts" / "demo" / "README.md").write_text(README, encoding="utf-8")
+    (root / "parts" / "demo" / "README.md").write_text(README, encoding="utf-8", newline="\n")
     (root / "parts" / "other").mkdir(parents=True)
     (root / "parts" / "other" / "README.md").write_text("# Other\n\n## Status\n\n- [x] one ✓ ([l](../../docs/evidence/x/y.txt))\n- [ ] two\n",
-                                                       encoding="utf-8")
+                                                       encoding="utf-8", newline="\n")
     (root / "parts" / "bare").mkdir(parents=True)
-    (root / "parts" / "bare" / "README.md").write_text("# Bare\n\nNo status list here.\n", encoding="utf-8")
+    (root / "parts" / "bare" / "README.md").write_text("# Bare\n\nNo status list here.\n", encoding="utf-8", newline="\n")
     (root / "docs").mkdir()
-    (root / "docs" / "RULES.md").write_text("rules\n")
+    (root / "docs" / "RULES.md").write_text("rules\n", encoding="utf-8", newline="\n")
     if with_evidence:
         ev = root / "docs" / "evidence" / "2026-10-25" / "demo"
         ev.mkdir(parents=True)
-        (ev / "boot.log").write_text("exit 0\n")
-        (ev / "hash.txt").write_text("abc\n")
+        (ev / "boot.log").write_text("exit 0\n", encoding="utf-8", newline="\n")
+        (ev / "hash.txt").write_text("abc\n", encoding="utf-8", newline="\n")
         ev2 = root / "docs" / "evidence" / "x"
         ev2.mkdir(parents=True)
-        (ev2 / "y.txt").write_text("y\n")
+        (ev2 / "y.txt").write_text("y\n", encoding="utf-8", newline="\n")
 
 
 CARD = """  <div class="card">
@@ -142,7 +142,7 @@ class CountTests(unittest.TestCase):
 
     def test_custom_evidence_folder(self):
         (self.root / "proof").mkdir()
-        (self.root / "proof" / "run.txt").write_text("ok\n")
+        (self.root / "proof" / "run.txt").write_text("ok\n", encoding="utf-8", newline="\n")
         ev = bp.Evidence(self.root, ("proof",), use_git=False)
         r = self.root / "parts" / "demo" / "README.md"
         self.assertEqual(bp.classify("- [x] Done ✓ see proof/run.txt", r, self.root, ev), "shown")
@@ -188,19 +188,19 @@ class PageTests(unittest.TestCase):
                     '<a href="../parts/demo/README.md">a plain link is not a source</a>'),
             CARD % ("Bare", link("bare")),
             CARD % ("No link", "nothing"),
-        ]), encoding="utf-8")
+        ]), encoding="utf-8", newline="\n")
         self.none = self.root / "none.json"
 
     def run_cli(self, *args):
         r = subprocess.run([sys.executable, "-I", str(TOOLS / "buildlog_progress.py"), "--settings", str(self.none),
-                            "--repo", str(self.root), "--no-git"] + list(args), capture_output=True, text=True, env=clean_env())
+                            "--repo", str(self.root), "--no-git"] + list(args), capture_output=True, text=True, encoding="utf-8", env=clean_env())
         self.assertEqual(r.returncode, 0, r.stderr)
         return r
 
     def test_json_output(self):
-        before = self.page.read_text()
+        before = self.page.read_text(encoding="utf-8")
         data = json.loads(self.run_cli().stdout)
-        self.assertEqual(self.page.read_text(), before, "no --write, no change")
+        self.assertEqual(self.page.read_text(encoding="utf-8"), before, "no --write, no change")
         cards = {c["title"]: c for c in data["cards"]}
         d = cards["Demo & friends"]
         self.assertEqual(d["sources"], ["parts/demo/README.md", "parts/other/README.md"])
@@ -210,9 +210,9 @@ class PageTests(unittest.TestCase):
         self.assertEqual(data["files"]["parts/demo/README.md"]["total"], 13)
 
     def test_write_edits_only_the_cards_section(self):
-        before = self.page.read_text()
+        before = self.page.read_text(encoding="utf-8")
         self.run_cli("--write")
-        after = self.page.read_text()
+        after = self.page.read_text(encoding="utf-8")
         a, b = before.index(bp.START), before.index(bp.END)
         a2, b2 = after.index(bp.START), after.index(bp.END)
         self.assertEqual(before[:a], after[:a2])
@@ -230,14 +230,14 @@ class PageTests(unittest.TestCase):
 
     def test_second_run_changes_nothing_and_stale_bars_are_replaced(self):
         self.run_cli("--write")
-        once = self.page.read_text()
+        once = self.page.read_text(encoding="utf-8")
         r = self.run_cli("--write")
         self.assertIn("unchanged", r.stderr)
-        self.assertEqual(self.page.read_text(), once)
+        self.assertEqual(self.page.read_text(encoding="utf-8"), once)
         readme = self.root / "parts" / "other" / "README.md"
-        readme.write_text(readme.read_text() + "- [x] three\n")
+        readme.write_text(readme.read_text(encoding="utf-8") + "- [x] three\n", encoding="utf-8", newline="\n")
         self.run_cli("--write")
-        now = self.page.read_text()
+        now = self.page.read_text(encoding="utf-8")
         self.assertEqual(now.count('<div class="prog"'), 2)
         self.assertEqual(now.count('class="muted prog-note"'), 1)
         self.assertIn("of 16 checks shown", now)
@@ -245,25 +245,26 @@ class PageTests(unittest.TestCase):
 
     def test_helper_removing_a_bar_gets_it_back(self):
         self.run_cli("--write")
-        once = self.page.read_text()
+        once = self.page.read_text(encoding="utf-8")
         stripped = re.sub(r'^[ \t]*<div class="prog".*\n', "", once, count=1, flags=re.M)
         stripped = re.sub(r'^<p class="muted prog-note".*\n', "", stripped, flags=re.M)
-        self.page.write_text(stripped)
+        self.page.write_text(stripped, encoding="utf-8", newline="\n")
         self.run_cli("--write")
-        self.assertEqual(self.page.read_text(), once)
+        self.assertEqual(self.page.read_text(encoding="utf-8"), once)
 
     def test_write_keeps_file_mode_and_leaves_no_temp_files(self):
         os.chmod(self.page, 0o640)
         self.run_cli("--write")
-        self.assertEqual(self.page.stat().st_mode & 0o777, 0o640)
+        if os.name != "nt":                            # Windows has no file modes
+            self.assertEqual(self.page.stat().st_mode & 0o777, 0o640)
         self.assertEqual(sorted(p.name for p in self.page.parent.iterdir() if p.is_file()), ["RULES.md", "buildlog.html"])
 
     def test_page_without_markers_is_an_error(self):
-        self.page.write_text("<html>no markers</html>")
+        self.page.write_text("<html>no markers</html>", encoding="utf-8", newline="\n")
         r = subprocess.run([sys.executable, "-I", str(TOOLS / "buildlog_progress.py"), "--settings", str(self.none),
-                            "--repo", str(self.root), "--no-git", "--write"], capture_output=True, text=True, env=clean_env())
+                            "--repo", str(self.root), "--no-git", "--write"], capture_output=True, text=True, encoding="utf-8", env=clean_env())
         self.assertNotEqual(r.returncode, 0)
-        self.assertEqual(self.page.read_text(), "<html>no markers</html>")
+        self.assertEqual(self.page.read_text(encoding="utf-8"), "<html>no markers</html>")
 
 
 SETTINGS = TOOLS / "buildlog.json"
@@ -275,7 +276,7 @@ class ProjectPageTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        s = json.loads(SETTINGS.read_text())
+        s = json.loads(SETTINGS.read_text(encoding="utf-8"))
         cls.root = (TOOLS / s.get("root", "../..")).resolve()
         cls.page = cls.root / s["page"]
         cls.has_cards = "cards" in s.get("sections", [])
@@ -286,9 +287,9 @@ class ProjectPageTests(unittest.TestCase):
         text = self.page.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory(dir=str(self.page.parent)) as d:
             copy = Path(d) / "buildlog.html"
-            copy.write_text(text, encoding="utf-8")
+            copy.write_text(text, encoding="utf-8", newline="\n")
             r = subprocess.run([sys.executable, "-I", str(TOOLS / "buildlog_progress.py"), "--page", str(copy), "--write"],
-                               capture_output=True, text=True, env=clean_env())
+                               capture_output=True, text=True, encoding="utf-8", env=clean_env())
             self.assertEqual(r.returncode, 0, r.stderr)
             new = copy.read_text(encoding="utf-8")
         a, b = text.index(bp.START), text.index(bp.END)

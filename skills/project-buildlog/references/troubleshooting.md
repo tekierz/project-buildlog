@@ -10,6 +10,9 @@ These are the problems we actually hit while building and running the system. Ea
 
 **Fix.**
 1. Find the process: `ss -ltnp 'sport = :PORT'`. Check it is the stray one (`ps -o pid,cmd -p PID`).
+   On Windows: `netstat -ano | findstr :PORT`, then `Get-CimInstance Win32_Process -Filter "ProcessId=PID" | Select CommandLine`;
+   stop it with `taskkill /PID PID /F` and restart with `schtasks /End /TN <service>` and `schtasks /Run /TN <service>`.
+   The server's log is `~/.local/state/<name>/server.log` there (pythonw has no console).
 2. Stop it: `kill PID`.
 3. Restart the service: `systemctl --user restart <service>`.
 

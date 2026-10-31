@@ -41,6 +41,15 @@ import uuid
 EVENT = "buildlog_message"
 RESULTS = {"pass": 0, "fail": 0, "note": 0}
 SCRUB = []
+WINDOWS = os.name == "nt"
+
+
+def setup_module():
+    """setup.py next to this script: its Windows helpers (access lists, port owner, logon task)."""
+    spec = importlib.util.spec_from_file_location("bl_setup", Path(__file__).resolve().with_name("setup.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def scrub(text):
@@ -80,7 +89,7 @@ def find_settings(project, explicit=None):
         if ".git" in cand.parts:
             continue
         try:
-            if json.loads(cand.read_text()).get("generator") == "project-buildlog":
+            if json.loads(cand.read_text(encoding="utf-8")).get("generator") == "project-buildlog":
                 return cand
         except (OSError, ValueError, AttributeError):
             continue
@@ -90,7 +99,7 @@ def find_settings(project, explicit=None):
 class Project:
     def __init__(self, settings_file):
         self.settings_file = settings_file
-        self.s = json.loads(settings_file.read_text())
+        self.s = json.loads(settings_file.read_text(encoding="utf-8"))
         self.tools = settings_file.parent
         self.root = (self.tools / self.s.get("root", "../..")).resolve()
         self.name = self.s["name"]
@@ -98,6 +107,7 @@ class Project:
         self.page = self.root / self.s["page"]
         self.tasks = self.root / self.s["tasks"]
         self.service = self.s.get("service", self.name)
+        self.manager = self.s.get("service_manager") or ("schtasks" if WINDOWS else "systemd")
         self.header = self.s.get("signature_header", "x-buildlog-signature")
         homes = self.s.get("_homes") or {}
         self.config = Path(homes.get("config_home") or Path.home() / ".config") / self.name / "webhook.json"
@@ -111,7 +121,7 @@ class Project:
 
     def config_data(self):
         try:
-            d = json.loads(self.config.read_text())
+            d = json.loads(self.config.read_text(encoding="utf-8"))
             return d if isinstance(d, dict) else {}
         except (OSError, ValueError):
             return {}
@@ -232,7 +242,8 @@ def post_direct(url, body, headers, timeout=15):
 
 
 def run(cmd, cwd=None, timeout=600):
-    return subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout)
 
 
 # ---- checks ---------------------------------------------------------------------------------
@@ -259,9 +270,16 @@ def check_files(p):
             check(False, "task file is valid", str(e))
     cfg = p.config_data()
     check(p.config.exists(), "private config exists: %s" % p.config)
+    if p.config.exists() and WINDOWS:
+        sm = setup_module()
+        why = sm.private_problem(p.config)
+        check(why is None, "only you can open the config (access list, the Windows form of mode 600)", why)
+        why = sm.private_problem(p.config.parent, folder=True)
+        check(why is None, "config folder is private (access list, the Windows form of 700)", why)
     if p.config.exists():
-        check(p.config.stat().st_mode & 0o777 == 0o600, "config mode is 600", oct(p.config.stat().st_mode & 0o777))
-        check(p.config.parent.stat().st_mode & 0o077 == 0, "config folder is private (700)")
+        if not WINDOWS:
+            check(p.config.stat().st_mode & 0o777 == 0o600, "config mode is 600", oct(p.config.stat().st_mode & 0o777))
+            check(p.config.parent.stat().st_mode & 0o077 == 0, "config folder is private (700)")
         sec = str(cfg.get("secret", ""))
         check(bool(re.fullmatch(r"[0-9a-f]{64}", sec)), "secret is 64 hex characters (32 random bytes)")
         inside = run(["git", "-C", str(p.config.parent), "rev-parse", "--show-toplevel"])
@@ -281,7 +299,7 @@ def check_files(p):
         if needles:
             fd, pat = tempfile.mkstemp(prefix="buildlog-verify.")
             try:
-                with os.fdopen(fd, "w") as f:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:    # no CR in the patterns
                     f.write("\n".join(needles) + "\n")
                 hits = run(["git", "-C", str(p.root), "grep", "-l", "-I", "-F", "-f", pat]).stdout.split()
                 hits += run(["git", "-C", str(p.root), "grep", "-l", "-I", "-F", "-f", pat, "--untracked"]).stdout.split()
@@ -309,7 +327,8 @@ def check_fake_roundtrip(p):
     tmp = tempfile.TemporaryDirectory(prefix="buildlog-verify.")
     try:
         cfg = Path(tmp.name) / "webhook.json"
-        cfg.write_text(json.dumps({"url": fake.url, "secret": secret, "header": p.header, "prefix": "sha256="}))
+        cfg.write_text(json.dumps({"url": fake.url, "secret": secret, "header": p.header, "prefix": "sha256="}),
+                       encoding="utf-8")
         os.chmod(cfg, 0o600)
         bs = p.load_module("buildlog_server")
         log = io.StringIO()
@@ -398,7 +417,8 @@ def check_fake_roundtrip(p):
                   and not any(m.get("text") == "verify: signed test" for m in convo),
                   "/api/messages lists the user's messages (not tests) for the conversation", "HTTP %s" % st)
             leaked = secret in log.getvalue() or fake.url in log.getvalue()
-            state_text = "".join(f.read_text() for f in (Path(tmp.name) / "state").glob("*") if f.is_file())
+            state_text = "".join(f.read_text(encoding="utf-8", errors="replace")
+                                 for f in (Path(tmp.name) / "state").glob("*") if f.is_file())
             check(not leaked and secret not in state_text and fake.url not in state_text,
                   "the key and URL appear in no log or state file")
         finally:
@@ -410,13 +430,25 @@ def check_fake_roundtrip(p):
 
 
 def check_service(p):
-    section("Installed service %s on port %d" % (p.service, p.port))
-    active = run(["systemctl", "--user", "is-active", "%s.service" % p.service]).stdout.strip()
-    check(active == "active", "%s.service is active" % p.service, active)
-    pid = run(["systemctl", "--user", "show", "-p", "MainPID", "--value", "%s.service" % p.service]).stdout.strip()
-    owner = run(["ss", "-ltnpH", "sport = :%d" % p.port]).stdout
-    check(bool(pid) and pid != "0" and ("pid=%s," % pid) in owner,
-          "the port belongs to the service's own process (not an old ad-hoc server)", owner.strip() or "nothing listening")
+    section("Installed service %s (%s) on port %d" % (p.service, p.manager, p.port))
+    if WINDOWS:
+        sm = setup_module()
+        ctx, _ = sm.load_ctx(argparse.Namespace(project=str(p.root), config_home=None, state_home=None, systemd_dir=None))
+        if p.manager == "schtasks":
+            state = sm.schtasks_state(ctx)
+            check(state == "Running", "logon task %s is running" % p.service, state or "not installed")
+        else:
+            note("no service manager (%s): the server was started by hand" % p.manager)
+        pid = sm.port_pid(p.port)
+        check(sm.is_own_server(ctx, pid), "the port belongs to this project's server (not an old ad-hoc server)",
+              sm.port_owner(p.port) or "nothing listening")
+    else:
+        active = run(["systemctl", "--user", "is-active", "%s.service" % p.service]).stdout.strip()
+        check(active == "active", "%s.service is active" % p.service, active)
+        pid = run(["systemctl", "--user", "show", "-p", "MainPID", "--value", "%s.service" % p.service]).stdout.strip()
+        owner = run(["ss", "-ltnpH", "sport = :%d" % p.port]).stdout
+        check(bool(pid) and pid != "0" and ("pid=%s," % pid) in owner,
+              "the port belongs to the service's own process (not an old ad-hoc server)", owner.strip() or "nothing listening")
     try:
         st, hdrs, raw = request(p.port, "GET", "/api/version")
         v = json.loads(raw)
@@ -497,6 +529,10 @@ def main(argv=None):
                     help="only run a fake T3 webhook on this port with the project's secret, logging each request "
                          "(for testing without T3: set-url http://127.0.0.1:PORT/hook/x)")
     args = ap.parse_args(argv)
+    if WINDOWS:                               # Windows pipes default to the ANSI code page
+        for f in (sys.stdout, sys.stderr):
+            if f is not None and not f.isatty():
+                f.reconfigure(encoding="utf-8", errors="backslashreplace")
     p = Project(find_settings(args.project, args.settings))
     SCRUB.extend(x for x in (p.config_data().get("url"), p.config_data().get("secret")) if x)
     if args.serve_fake_t3:

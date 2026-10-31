@@ -25,7 +25,7 @@ Source: [plugin reference](https://code.claude.com/docs/en/plugins-reference), [
 
 ## Optional startup hooks
 
-The core manifest does not register hooks. Examples are under root `integrations/`, outside the auto-discovered `hooks/hooks.json` location. Hooks are optional enrichment; direct CLI calls work everywhere this plugin's Python/Unix requirements are met.
+The core manifest does not register hooks. Examples are under root `integrations/`, outside the auto-discovered `hooks/hooks.json` location. Hooks are optional enrichment; direct CLI calls work everywhere this plugin's Python requirements are met (Linux, macOS or Windows).
 
 - **Claude plugin:** copy `integrations/claude-hooks.json` to `hooks/hooks.json` in a private/local distribution. It uses `${CLAUDE_PLUGIN_ROOT}` and runs on startup, resume, `/clear` and compaction. For project/user settings, merge the `hooks` field and replace the command with the quoted absolute script path; the plugin environment variable is not guaranteed outside plugin hooks.
 - **Codex plugin:** in a private/manual desktop distribution, copy `integrations/codex-hooks.json` to `hooks/hooks.json`. It uses `${PLUGIN_ROOT}`. Follow the runtime's hook review/trust flow. A standalone skill symlink does not register plugin hooks.

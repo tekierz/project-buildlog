@@ -2,7 +2,6 @@
 """Compact agent handoffs, work records and deterministic buildlog rendering. Stdlib only."""
 import argparse
 import datetime
-import fcntl
 import hashlib
 import html
 import json
@@ -12,6 +11,13 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
 
 STATUSES = ("planned", "running", "blocked", "review", "done", "cancelled")
 PRIORITY = {s: i for i, s in enumerate(("blocked", "review", "running", "planned", "done", "cancelled"))}
@@ -21,10 +27,17 @@ def atomic(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
             stream.write(text)
         os.chmod(tmp, path.stat().st_mode & 0o777 if path.exists() else 0o644)
-        os.replace(tmp, path)
+        for attempt in range(40):  # Windows: a reader (the server) may briefly hold the target open
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 39:
+                    raise
+                time.sleep(0.05)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -245,8 +258,7 @@ def main(argv=None):
             path = args.settings or settings_path(args.project)
         settings, root, page, state = context(path.resolve())
         # A shared directory lock matches the task/progress writers, including render.
-        with open_directory(page.parent) as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with directory_lock(page.parent):
             if args.command in ("brief", "hook"):
                 if args.max_chars < 600 or args.limit < 1:
                     raise ValueError("max-chars must be >=600 and limit >=1")
@@ -331,15 +343,33 @@ def commit(args, settings, paths, message):
     return result.returncode
 
 
-class open_directory:
+class directory_lock:
+    """The task CLI's exclusive directory lock (buildlog_tasks.Locked): flock on the directory, or on Windows
+    msvcrt on a lock file named after it in the temp folder."""
+
     def __init__(self, path):
         self.path = path
 
     def __enter__(self):
-        self.fd = os.open(self.path, os.O_RDONLY)
-        return self.fd
+        if fcntl:
+            self.fd = os.open(self.path, os.O_RDONLY)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+            return self.fd
+        key = hashlib.sha256(os.path.normcase(os.path.abspath(str(self.path))).encode("utf-8")).hexdigest()[:20]
+        self.fd = os.open(os.path.join(tempfile.gettempdir(), "buildlog-%s.lock" % key), os.O_RDWR | os.O_CREAT, 0o600)
+        while True:
+            try:
+                msvcrt.locking(self.fd, msvcrt.LK_LOCK, 1)
+                return self.fd
+            except OSError:
+                continue
 
     def __exit__(self, *args):
+        if fcntl:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+        else:
+            os.lseek(self.fd, 0, os.SEEK_SET)
+            msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
         os.close(self.fd)
 
 
