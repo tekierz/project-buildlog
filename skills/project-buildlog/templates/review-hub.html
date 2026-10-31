@@ -296,10 +296,63 @@ details.earlier[open] summary{border-bottom:1px solid var(--line);margin-bottom:
 .help div{display:flex;justify-content:space-between;gap:16px;padding:2px 0}
 .helpbtn{position:fixed;right:18px;bottom:18px;z-index:39;width:40px;height:40px;border-radius:50%;background:var(--panel2);border:1px solid var(--line-strong);color:var(--text2);cursor:pointer;font-size:16px}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line-strong);border-radius:10px;padding:8px 14px;font-size:14px;z-index:80;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+/* versions, decisions inside their document, carried-over notes, new since last visit */
+.pill.ver{font:600 11.5px var(--mono);color:var(--text2)}
+.pill.ver.cur{color:var(--accent);border-color:rgba(45,212,191,.45)}
+.pill.new{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:700}
+.pill.upd{color:var(--accent);border-color:rgba(45,212,191,.55)}
+.pill.old{color:var(--warn);border-color:rgba(245,185,66,.5)}
+.superseded{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;margin:2px 0 10px;padding:8px 12px;border-radius:9px;background:rgba(245,185,66,.1);border:1px solid rgba(245,185,66,.5);font-size:14.5px;color:var(--text)}
+.superseded b{color:var(--warn)}
+.linkbtn{background:none;border:0;padding:0;color:var(--info);cursor:pointer;font:inherit;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.card.nested{border-radius:12px;padding:14px 18px;margin:10px 0;background:var(--panel2);scroll-margin-top:calc(var(--head) + 12px)}
+.card.nested h3{font-size:18px}
+.card.nested .summary{font-size:15.5px}
+.card.old{background:transparent;border-style:dashed}
+.card.context .ctx-line{font-size:14.5px;color:var(--text2);margin:2px 0 8px}
+.kids{margin:14px 0 0;padding:12px 14px 4px;border:1px solid var(--line-strong);border-radius:14px;background:rgba(255,255,255,.02)}
+.kids > h4,.versions-h{margin:0 0 2px;font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700}
+.kids > h4 b{color:var(--text2)}
+details.earlier.versions > summary{font-size:14.5px}
+.carry{margin:4px 0 12px;border:1px solid rgba(245,185,66,.45);background:rgba(245,185,66,.06);border-radius:12px;padding:10px 14px 6px}
+.carry.done{border-color:var(--line-strong);background:transparent}
+.carry-head{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;font-size:15px;color:var(--text)}
+.carry-head .open{color:var(--warn);font-weight:700}.carry-head .ok{color:var(--good);font-weight:650}
+.carry ol{list-style:none;padding:0;margin:8px 0 4px}
+.carry li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-top:1px solid var(--line);align-items:start;font-size:14.5px}
+.carry li .v{font:700 11px var(--mono);color:var(--warn);border:1px solid rgba(245,185,66,.5);border-radius:5px;padding:1px 6px;margin-top:2px}
+.carry li .tx{overflow-wrap:anywhere;color:var(--text)}
+.carry li .meta{grid-column:2;font-size:13px;color:var(--muted)}
+.carry li .meta button{text-align:left;font-size:13px;color:var(--info);background:none;border:0;padding:0;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.carry li .stt{font-size:12.5px;white-space:nowrap;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.carry li .stt .o{color:var(--warn);font-weight:650}.carry li .stt .k{color:var(--good);font-weight:650}
+.carry li.decision .tx{color:var(--text2)}
+.carry li .meta .gone{color:var(--warn);font-weight:600}
+.carry details summary{cursor:pointer;color:var(--muted);font-size:13.5px;padding:4px 0}
+.ctl.closed{color:var(--text2);font-size:14.5px}
+.ctl.closed textarea{opacity:.5;cursor:not-allowed}
+.carry li .stt .r{color:var(--info);font-weight:650}
+.carry li .meta .now{color:var(--accent);font-weight:650;text-decoration:none}
+.carry li .reply{grid-column:2;font-size:13.5px;color:var(--text2);border-left:2px solid var(--good);padding-left:8px;margin-top:3px}
+.carry li .reply b{color:var(--good);font-weight:650}
+.verdict-hint{margin:16px 0 0;font-size:14px;color:var(--text2)}
+.verdict-hint + .ctl{margin-top:6px;padding-top:0;border-top:0}
+.ctl.compact{margin-top:8px;padding-top:10px}
+.ctl.compact .notebox{display:none}
+.ctl .addnote{font-size:13.5px;margin-top:8px}
+.ctl:not(.compact) .addnote{display:none}
+.pill.ver.new{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.newer{position:sticky;top:calc(var(--head) + 6px);z-index:25;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:#2a2108;border:1px solid var(--warn);font-size:15px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.newer b{color:var(--warn)}.newer .btn{margin-left:auto}
+.newbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 14px;padding:8px 14px;border-radius:10px;background:var(--accent-soft);border:1px solid rgba(45,212,191,.4);font-size:14.5px}
+.newbar b{color:var(--accent)}.newbar .btn{margin-left:auto}
+h2.sec.now{color:var(--p-urgent)}
 footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-align:center}
 @media (max-width:760px){.bar1,.bar2{padding-left:12px;padding-right:12px}main{padding:12px 10px 70px}.card{padding:14px 14px}.card h3{font-size:19px}
   nav.links{display:none}.helpbtn,.help{display:none}.search{flex:1 1 100%}.views{overflow-x:auto;max-width:100%;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 85%,transparent)}
-  .cands.grid{grid-template-columns:1fr}.crumbs a,.crumbs button{max-width:22ch}}
+  .cands.grid{grid-template-columns:1fr}.crumbs a,.crumbs button{max-width:22ch}
+  .carry li{grid-template-columns:auto minmax(0,1fr)}.carry li .stt{grid-column:2;flex-direction:row;align-items:center;justify-content:space-between}
+  .kids{padding:10px 8px 2px}.card.nested{padding:12px 12px}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.btn,.card{transition:none}}
 </style>
 </head>
@@ -320,6 +373,8 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
 </header>
 <main>
   <div id="banner" class="banner" hidden></div>
+  <div id="newbar" class="newbar" hidden role="status"></div>
+  <div id="newer" class="newer" hidden role="alert"></div>
   <div id="list"></div>
   <section id="messages" class="msgbox">
     <h2>Message the orchestrator</h2>
@@ -365,7 +420,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
   var VIEW_HEAD = {open: 'Needs you', answered: 'Answered, with the orchestrator', snoozed: 'Snoozed', closed: 'Done'};
   var QUIET = ['comment', 'snooze', 'unsnooze', 'resolve', 'unresolve'];
   var S = {items: snap.items, live: false, delivery: 'local', current: null, messages: [],
-    f: {view: 'open', kind: [], prio: [], tag: [], q: ''}, route: {}};
+    f: {view: 'open', kind: [], prio: [], tag: [], q: ''}, route: {}, byId: {}, newer: {}, kids: {}};
   var refs = {};        // id -> {ta, st, anchorEl, anchor, row}
   var players = [];     // every audio/video element, so one plays at a time
   var version = null, typing = false;
@@ -416,21 +471,141 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
   }
   function why(e) { return e instanceof TypeError ? 'cannot reach the build log server' : e.message; }
   function toast(t) { var n = el('div', {class: 'toast', role: 'status', text: t}); document.body.appendChild(n); setTimeout(function () { n.remove(); }, 2400); }
-  function item(id) { for (var i = 0; i < S.items.length; i++) if (S.items[i].id === id) return S.items[i]; return null; }
+  function item(id) { return Object.prototype.hasOwnProperty.call(S.byId, id) ? S.byId[id] : null; }
+
+  /* LINE-MATCH:START (the same code runs in the hub and the document pages; md_render.py LINE_JS is the source) */
+  function normText(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+  function lineFp(s) {
+    var t = normText(s).slice(0, 80); if (!t) return '';
+    var h = 0x811c9dc5;
+    for (var i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return ('0000000' + h.toString(16)).slice(-8);
+  }
+  function similarity(a, b) {
+    a = normText(a).slice(0, 160); b = normText(b).slice(0, 160);
+    if (!a || !b) return 0; if (a === b) return 1;
+    var pa = {}, pb = {}, common = 0, k;
+    for (var i = 0; i < a.length - 1; i++) { k = a.slice(i, i + 2); pa[k] = (pa[k] || 0) + 1; }
+    for (var j = 0; j < b.length - 1; j++) { k = b.slice(j, j + 2); pb[k] = (pb[k] || 0) + 1; }
+    Object.keys(pa).forEach(function (x) { common += Math.min(pa[x], pb[x] || 0); });
+    return 2 * common / (Math.max(1, a.length - 1) + Math.max(1, b.length - 1));
+  }
+  /* a document path without the version number in its file name (review.py doc_stem): ep1_v12.screen.md -> ep1.screen.md */
+  function stem(path) {
+    var parts = String(path || '').split('/'), name = parts.pop(), i = name.indexOf('.');
+    return parts.concat([(i < 0 ? name : name.slice(0, i)).replace(/[_.\- ]?v\d+(?=[_.\- ]|$)/ig, '') + (i < 0 ? '' : name.slice(i))]).join('/');
+  }
+  /* where a line comment belongs now: {status: same|moved|changed|removed, line} or null (unknown) */
+  function relocate(an, lines) {
+    if (!lines || !lines.length || !an) return null;
+    var fp = an.fp || lineFp(an.excerpt); if (!fp) return null;
+    var n = Number(an.line) || 0, i, row;
+    for (i = 0; i < lines.length; i++) if (lines[i][0] === n && lines[i][1] === fp) return {status: 'same', line: n};
+    var exact = lines.filter(function (r) { return r[1] === fp; });
+    if (exact.length) { exact.sort(function (x, y) { return Math.abs(x[0] - n) - Math.abs(y[0] - n); }); return {status: 'moved', line: exact[0][0]}; }
+    var base = normText(an.excerpt).slice(0, 48), best = null, score = 0;
+    for (i = 0; i < lines.length; i++) { row = lines[i]; var sc = similarity(base, row[3]) - Math.abs(row[0] - n) * 0.0005; if (sc > score) { best = row; score = sc; } }
+    if (best && score >= 0.55) return {status: 'changed', line: best[0]};
+    return {status: 'removed', line: n};
+  }
+  /* LINE-MATCH:END */
+
+  /* ---- versions and parents ----
+     An item that replaces another names it in supersedes (review.py also writes superseded_by on the old one). The old
+     one is shown only inside the current version's card, under Earlier versions. An item with parent (a decision about
+     a script) is shown inside that document's card, following it to its newest version. */
+  function reindex() {
+    S.byId = {}; S.newer = {}; S.kids = {};
+    S.items.forEach(function (it) { S.byId[it.id] = it; });
+    S.items.forEach(function (it) { if (it.supersedes && it.supersedes !== it.id && S.byId[it.supersedes]) S.newer[it.supersedes] = it.id; });
+    S.items.forEach(function (it) { if (it.superseded_by && it.superseded_by !== it.id && S.byId[it.superseded_by] && !S.newer[it.id]) S.newer[it.id] = it.superseded_by; });
+    S.items.forEach(function (it) { var p = parentOf(it); if (p) (S.kids[p.id] = S.kids[p.id] || []).push(it); });
+  }
+  function newerOf(it) { var id = S.newer[it.id]; return id ? item(id) : null; }
+  function isOld(it) { return !!newerOf(it); }
+  function headOf(it) { var seen = {}; while (it && newerOf(it) && !seen[it.id]) { seen[it.id] = 1; it = newerOf(it); } return it; }
+  function earlier(it) {            /* the versions it replaces, newest first */
+    var out = [], seen = {}; seen[it.id] = 1;
+    var p = it.supersedes && item(it.supersedes);
+    while (p && !seen[p.id]) { seen[p.id] = 1; out.push(p); p = p.supersedes && item(p.supersedes); }
+    return out;
+  }
+  function parentOf(it) {           /* one level only, so a loop of parents cannot hide items */
+    if (!it.parent || isOld(it)) return null;
+    var p = item(it.parent); p = p && headOf(p);
+    return p && p.id !== it.id && !(p.parent && item(p.parent)) ? p : null;
+  }
+  function vlabel(it) {
+    if (it.version) return it.version;
+    var n = earlier(it).length;
+    return n || isOld(it) ? 'v' + (n + 1) : '';
+  }
+  function noun(it) { var d = (it.docs || [])[0]; return d ? (d.kind === 'script' ? 'script' : 'document') : 'item'; }
+  /* a note's thread: the line or the moment it was left on, or the note itself */
+  function noteKey(a) {
+    var an = a.anchor; if (!an || an.type === 'msg') return 'msg:' + (an && an.id || a.id);
+    return an.type === 'line' ? 'line:' + (an.doc || '') + '#' + an.line : 'time:' + (an.media || '') + '@' + Number(an.time_s).toFixed(1);
+  }
+  function isResolved(it, key) { return !!(it && it.resolved && it.resolved[key] && it.resolved[key].resolved); }
+  /* notes left on earlier versions: they stay visible on the current one until they are addressed */
+  function carried(it) {
+    var out = [];
+    earlier(it).forEach(function (o) {
+      (o.answers || []).forEach(function (a) {
+        if (a.decision === 'resolve' || a.decision === 'unresolve' || a.decision === 'snooze' || a.decision === 'unsnooze') return;
+        var note = !!(a.comment || '').trim();
+        if (!note && a.decision === 'comment') return;
+        var key = noteKey(a);
+        out.push({from: o, a: a, note: note, key: key, done: isResolved(o, key) || isResolved(it, key)});
+      });
+    });
+    return out;
+  }
+
+  /* ---- new since your last visit (this browser): the time you last left the page is kept in localStorage; a card
+     you click or answer counts as seen ---- */
+  var VISIT_KEY = 'review.visit:' + location.pathname, SEEN_KEY = 'review.seen:' + location.pathname;
+  S.since = ''; S.seen = {};
+  try {
+    var held = sessionStorage.getItem(VISIT_KEY);
+    if (held === null) { held = localStorage.getItem(VISIT_KEY) || 'first'; sessionStorage.setItem(VISIT_KEY, held); }
+    S.since = held === 'first' ? '' : held;
+    S.seen = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}') || {};
+    localStorage.setItem(VISIT_KEY, new Date().toISOString());
+  } catch (e) {}
+  function leaving() { try { localStorage.setItem(VISIT_KEY, new Date().toISOString()); } catch (e) {} }
+  window.addEventListener('pagehide', leaving);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) leaving(); });
+  function tms(iso) { var t = new Date(iso || 0).getTime(); return isNaN(t) ? 0 : t; }
+  function fresh(it) {            /* 'new' | 'new version' | 'new reply' | 'updated' | '' */
+    if (!S.since || isOld(it)) return '';
+    var since = tms(S.since), seen = tms(S.seen[it.id]);
+    var added = tms(it.added), upd = tms(it.updated);
+    var reply = 0; (it.thread || []).forEach(function (m) { if (m.who !== 'you') reply = Math.max(reply, tms(m.at)); });
+    if (added > since && added > seen) return earlier(it).length ? 'new version' : 'new';
+    if (reply > since && reply > seen) return 'new reply';
+    if (upd > since && upd > seen && upd - added > 60000) return 'updated';
+    return '';
+  }
+  function markSeen(id) {
+    var it = item(id); if (!it || !fresh(it)) return;
+    S.seen[id] = new Date().toISOString();
+    try {
+      Object.keys(S.seen).forEach(function (k) { if (!item(k)) delete S.seen[k]; });
+      localStorage.setItem(SEEN_KEY, JSON.stringify(S.seen));
+    } catch (e) {}
+    var n = document.getElementById(id); if (n) { var b = n.querySelector(':scope > .card-head .pill.new, :scope > .card-head .pill.upd'); if (b) b.remove(); }
+    newbar();
+  }
 
   /* ---- item state: bucket, importance, snooze ---- */
   function isAnswered(it) { return !!(it.answer && it.answer.decision && QUIET.indexOf(it.answer.decision) < 0); }
   function snoozeOf(it) { var s = it.snooze; return s && !s.cleared ? s : null; }
   function snoozeActive(it) { var s = snoozeOf(it); return !!s && (s.later || (s.until && new Date(s.until).getTime() > Date.now())); }
   function snoozeDue(it) { var s = snoozeOf(it); return !!s && !s.later && !!s.until && new Date(s.until).getTime() <= Date.now(); }
-  function bucket(it) { return it.status === 'closed' ? 'closed' : snoozeActive(it) ? 'snoozed' : isAnswered(it) ? 'answered' : 'open'; }
+  function bucket(it) { return isOld(it) ? 'old' : it.status === 'closed' ? 'closed' : snoozeActive(it) ? 'snoozed' : isAnswered(it) ? 'answered' : 'open'; }
   function prio(it) { var i = PRIOS.indexOf(it.priority); return i < 0 ? 2 : i; }
   function prioName(it) { return PRIOS[prio(it)]; }
-  function sorted(list) {
-    return list.slice().sort(function (a, b) {
-      return prio(a) - prio(b) || ((a.kind === 'info') - (b.kind === 'info')) || (snoozeDue(b) - snoozeDue(a)) || String(b.added || '').localeCompare(String(a.added || ''));
-    });
-  }
   function text(it) {
     var parts = [it.id, it.title, it.summary, it.body, it.default, (it.tags || []).join(' '), KIND_LABEL[it.kind]];
     (it.choices || []).forEach(function (c) { parts.push(c.label, c.detail); });
@@ -441,6 +616,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     return parts.filter(Boolean).join(' \n ').toLowerCase();
   }
   function matches(it, f, skip) {
+    if (isOld(it)) return false;            /* old versions live inside their current version's card */
     if (skip !== 'view' && f.view !== 'all' && bucket(it) !== f.view) return false;
     if (skip !== 'kind' && f.kind.length && f.kind.indexOf(it.kind) < 0) return false;
     if (skip !== 'prio' && f.prio.length && f.prio.indexOf(prioName(it)) < 0) return false;
@@ -449,10 +625,57 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     return true;
   }
   var BUCKET_ORDER = {open: 0, answered: 1, snoozed: 2, closed: 3};
-  function visible() {
-    var list = sorted(S.items.filter(function (it) { return matches(it, S.f); }));
-    if (S.f.view === 'all') list.sort(function (a, b) { return BUCKET_ORDER[bucket(a)] - BUCKET_ORDER[bucket(b)] || list.indexOf(a) - list.indexOf(b); });
-    return list;
+  /* What the list shows: one card per document or item (its current version), with the decisions that belong to it
+     inside. A card is listed when it or one of its decisions matches the view and filters. */
+  function units() {
+    var out = [];
+    S.items.forEach(function (top) {
+      if (isOld(top) || parentOf(top)) return;
+      var kids = S.kids[top.id] || [], self = matches(top, S.f);
+      var mk = kids.filter(function (k) { return matches(k, S.f); });
+      if (!self && !mk.length) return;
+      var members = (self ? [top] : []).concat(mk), latest = 0, best = 3;
+      members.forEach(function (m) {
+        var t = tms(m.added); if (snoozeDue(m) && m.snooze) t = Math.max(t, tms(m.snooze.until));
+        latest = Math.max(latest, t); best = Math.min(best, prio(m));
+      });
+      out.push({top: top, self: self, kids: mk, n: members.length, latest: latest, best: best,
+        bucket: bucket(self ? top : mk[0]), urgent: members.some(function (m) { return prio(m) === 0; })});
+    });
+    return out;
+  }
+  var WS = (snap.workstreams || []).map(function (w) {
+    return {name: w.name, tags: w.tags || [], ids: (w.ids || []).map(function (g) {
+      return new RegExp('^' + String(g).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'); })};
+  });
+  function workstream(it) {
+    if (it.workstream) return it.workstream;
+    for (var i = 0; i < WS.length; i++) {
+      var w = WS[i];
+      if (w.ids.some(function (re) { return re.test(it.id); }) || w.tags.some(function (t) { return (it.tags || []).indexOf(t) >= 0; })) return w.name;
+    }
+    return (it.tags || [])[0] ? '#' + it.tags[0] : '';
+  }
+  /* Needs you: urgent work first ("Needs you now"), then one group per workstream, the busiest and most important
+     first; newest first inside a group. All: grouped by state. */
+  function grouped() {
+    var groups = {}, order = [];
+    units().forEach(function (u) {
+      var key, title;
+      if (S.f.view === 'all') { key = 'b:' + u.bucket; title = VIEW_HEAD[u.bucket]; }
+      else if (S.f.view === 'open' && u.urgent) { key = 'now'; title = 'Needs you now'; }
+      else { var w = workstream(u.top); key = 'w:' + w; title = w || (Object.keys(groups).length || WS.length ? 'Everything else' : ''); }
+      if (!groups[key]) { groups[key] = {key: key, title: title, units: [], n: 0, latest: 0, best: 3}; order.push(groups[key]); }
+      var g = groups[key]; g.units.push(u); g.n += u.n; g.latest = Math.max(g.latest, u.latest); g.best = Math.min(g.best, u.best);
+    });
+    order.forEach(function (g) {
+      g.units.sort(function (a, b) { return b.latest - a.latest; });
+      if (g.key === 'w:' && order.length > 1) g.title = 'Everything else';
+    });
+    return order.sort(function (a, b) {
+      if (S.f.view === 'all') return BUCKET_ORDER[a.key.slice(2)] - BUCKET_ORDER[b.key.slice(2)];
+      return (b.key === 'now') - (a.key === 'now') || (a.key === 'w:') - (b.key === 'w:') || a.best - b.best || b.latest - a.latest;
+    });
   }
   function allTags() { var out = []; S.items.forEach(function (it) { (it.tags || []).forEach(function (t) { if (out.indexOf(t) < 0) out.push(t); }); }); return out.sort(); }
 
@@ -488,9 +711,9 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     var r = parseHash(), f = S.f;
     var nf = {view: r.view || 'open', kind: r.kind ? r.kind.split(',') : [], prio: r.prio ? r.prio.split(',') : [],
       tag: r.tag ? r.tag.split(',') : [], q: r.q || ''};
-    var it = r.item && item(r.item);
-    if (it && !matches(it, nf)) {        // a link to an item hidden by the filters: show it where it lives
-      nf = {view: bucket(it), kind: [], prio: [], tag: [], q: ''};
+    var it = r.item && item(r.item), shown = it && headOf(it), par = shown && parentOf(shown);
+    if (it && !matches(shown, nf) && !(par && matches(par, nf))) {   // hidden by the filters: show it where it lives
+      nf = {view: bucket(shown), kind: [], prio: [], tag: [], q: ''};
       history.replaceState(null, '', buildHash(Object.assign({}, r, {view: nf.view, kind: '', prio: '', tag: '', q: ''})));
     }
     var changed = JSON.stringify(nf) !== JSON.stringify(f);
@@ -842,6 +1065,13 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
   /* ---- documents ---- */
   function docComments(it, d) {
     var open = 0, done = 0, seen = {};
+    earlier(it).forEach(function (o) {
+      (o.answers || []).forEach(function (a) {
+        if (!a.anchor || a.anchor.type !== 'line' || a.decision !== 'comment' || !(a.anchor.doc === d.path || stem(a.anchor.doc || '') === stem(d.path))) return;
+        var k = 'line:' + a.anchor.doc + '#' + a.anchor.line; if (seen[o.id + k]) return; seen[o.id + k] = 1;
+        if (isResolved(o, k) || isResolved(it, k)) done++; else open++;
+      });
+    });
     (it.answers || []).forEach(function (a) {
       if (!a.anchor || a.anchor.type !== 'line' || a.anchor.doc !== d.path || a.decision !== 'comment') return;
       var k = 'line:' + d.path + '#' + a.anchor.line; if (seen[k]) return; seen[k] = 1;
@@ -854,14 +1084,16 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     if (isPage(d)) return ROOT + d.html + (d.kind === 'md' || d.kind === 'script' ? '?item=' + encodeURIComponent(it.id) : '') + (line ? '#L' + line : '');
     return url(d.path);
   }
-  function docButtons(it) {
+  function docButtons(it, old) {
     if (!(it.docs || []).length) return null;
     var row = el('div', {class: 'docs'}), more = null;
     it.docs.forEach(function (d, i) {
       var cc = docComments(it, d);
       var icon = d.kind === 'script' ? '🎬' : d.kind === 'pdf' ? '📄' : '📝';
-      var btn = el('a', {class: 'doc' + (i === 0 ? ' primary' : ''), href: docHref(it, d), target: '_blank', rel: 'noopener', 'data-doc': d.path}, [
-        el('span', {text: icon}), el('span', {text: (i === 0 ? 'Open: ' : '') + d.title}),
+      var primary = i === 0 && !old;
+      var btn = el('a', {class: 'doc' + (primary ? ' primary' : ''), href: docHref(it, d), target: '_blank', rel: 'noopener', 'data-doc': d.path,
+        title: old && d.shared ? 'This page now shows the newest text' : null}, [
+        el('span', {text: icon}), el('span', {text: (primary ? 'Open: ' : old ? vlabel(it) + ': ' : '') + d.title}),
         d.kind === 'script' ? el('small', {text: 'screenplay'}) : d.kind === 'pdf' ? el('small', {text: 'PDF'}) : null,
         cc.open ? el('span', {class: 'cc', title: cc.open + ' open comment thread(s)', text: '💬 ' + cc.open}) : cc.done ? el('span', {class: 'cc ok', title: 'all comment threads resolved', text: '✓ ' + cc.done}) : null]);
       on(btn, 'click', function (ev) { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); setCurrent(it.id, true); openDoc(it, d.path); });
@@ -973,12 +1205,16 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     var x = el('button', {type: 'button', 'aria-label': 'Remove the time', text: '✕'});
     on(x, 'click', function () { r.anchor = null; r.anchorEl.hidden = true; });
     r.anchorEl.appendChild(x); r.anchorEl.hidden = false;
+    if (r.show) r.show();
     r.ta.focus(); setCurrent(id, true);
   }
   function answer(id, body) {
     var r = refs[id], it = item(id);
     if (!S.live) { if (r) r.st.textContent = 'Open the live page to answer.'; return Promise.reject(new Error('offline')); }
+    if (isOld(it) && body.decision !== 'resolve' && body.decision !== 'unresolve') { toast('That version was replaced by ' + vlabel(headOf(it)) + '. Answer there.'); return Promise.reject(new Error('old version')); }
     body.item_id = id;
+    body.seen = {rev: it.rev || '', version: it.version || ''};      // the server records which version the note was made on
+    markSeen(id);
     if (QUIET.indexOf(body.decision) < 0 || body.decision === 'comment') {
       body.comment = (r && r.ta.value.trim()) || body.comment || '';
       if (r && r.anchor) body.anchor = r.anchor;
@@ -996,6 +1232,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
       var r2 = refs[id];
       var msg = a.decision === 'snooze' ? 'Snoozed ' + (a.later ? 'for later' : 'until ' + dayName(a.until)) + '. It is under Snoozed.' : a.decision === 'unsnooze' ? 'Back in the list.' :
         res.delivered ? (res.status === 'local' || res.status === 'read' ? 'Saved for the orchestrator.' : 'Sent.') : 'Queued: ' + (res.error || 'will retry');
+      if (a.outdated && (QUIET.indexOf(a.decision) < 0 || a.decision === 'comment')) msg += ' Note: ' + a.outdated + '; it is kept and flagged for the orchestrator.';
       if (r2) { r2.st.className = 'st ' + (res.delivered ? 'st-sent' : 'st-queued'); r2.st.textContent = msg; }
       if (QUIET.indexOf(a.decision) >= 0 && a.decision !== 'comment') toast(msg);
       return res;
@@ -1047,8 +1284,9 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
   }
 
   /* ---- cards ---- */
-  function controls(it) {
-    var id = it.id, box = el('div', {class: 'ctl'}), row = el('div', {class: 'row'});
+  function controls(it, opts) {
+    opts = opts || {};
+    var id = it.id, box = el('div', {class: 'ctl' + (opts.compact ? ' compact' : '')}), row = el('div', {class: 'row'});
     var answered = isAnswered(it) ? it.answer : null;
     if (answered) {
       var change = el('button', {type: 'button', class: 'btn small ghost', text: it.kind === 'audition' ? 'Change pick' : 'Change answer'});
@@ -1104,10 +1342,15 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     var anchorEl = el('div', {class: 'anchor', hidden: true});
     if (!S.live) st.textContent = 'Read-only snapshot. Answer on the live page.';
     if (row.childNodes.length) box.appendChild(row);
-    box.appendChild(ta);
-    box.appendChild(anchorEl);
-    box.appendChild(el('div', {class: 'row'}, [note, st]));
-    refs[id] = {ta: ta, st: st, anchorEl: anchorEl, anchor: null, row: row};
+    var noteRow = el('div', {class: 'row'}, [note]), notebox = el('div', {class: 'notebox'}, [ta, anchorEl, noteRow]);
+    var show = function () { box.classList.remove('compact'); noteRow.appendChild(st); };
+    if (opts.compact) {             /* a decision inside a document's card: answers in one row, the note on request */
+      var add = el('button', {type: 'button', class: 'linkbtn addnote', text: '+ Add a note'});
+      on(add, 'click', function () { show(); ta.focus(); });
+      box.appendChild(el('div', {class: 'row'}, [add, st]));
+    } else noteRow.appendChild(st);
+    box.appendChild(notebox);
+    refs[id] = {ta: ta, st: st, anchorEl: anchorEl, anchor: null, row: row, show: show};
     return box;
   }
   function candidates(it, answered) {
@@ -1196,14 +1439,23 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     markAB();
     return wrap;
   }
+  /* a line note in the current text of a document: {doc, loc: {status: same|moved|changed|removed, line}} */
+  function lineNow(holder, an) {
+    var docs = holder.docs || [];
+    var d = docs.filter(function (x) { return x.path === an.doc; })[0] || docs.filter(function (x) { return stem(x.path) === stem(an.doc || '') && stem(x.path) !== x.path; })[0];
+    return d ? {doc: d, loc: relocate(an, d.lines)} : null;
+  }
+  var FATE = {moved: 'moved: now line ', changed: 'line changed: now line ', removed: 'this line was removed'};
   function anchorLink(it, an) {
-    if (!an) return null;
+    if (!an || an.type === 'msg') return null;
     if (an.type === 'line') {
       var d = (it.docs || []).filter(function (x) { return x.path === an.doc; })[0];
-      var label = (d ? d.title : base(an.doc || '')) + ', line ' + an.line + (an.excerpt ? ': “' + an.excerpt.replace(/^[^:]{1,40}:\s*/, '').slice(0, 70) + '”' : '');
+      var now = d && !isOld(it) ? lineNow(it, an) : null, loc = now && now.loc;
+      var label = (d ? d.title : base(an.doc || '')) + ', line ' + an.line + (an.excerpt ? ': “' + an.excerpt.replace(/^[^:]{1,40}:\s*/, '').slice(0, 70) + '”' : '') +
+        (loc && loc.status !== 'same' ? ' (' + FATE[loc.status] + (loc.status === 'removed' ? '' : loc.line) + ')' : '');
       if (!d && !/\.html$/.test(an.doc || '')) return el('span', {class: 'st', text: label});
       var a = el('button', {type: 'button', text: label});
-      on(a, 'click', function () { setCurrent(it.id, true); openDoc(it, an.doc, an.line); });
+      on(a, 'click', function () { setCurrent(it.id, true); openDoc(it, an.doc, loc && loc.status !== 'removed' ? loc.line : an.line); });
       return a;
     }
     var t = el('button', {type: 'button', text: fmtTime(an.time_s, true) + ' in ' + base(an.media || '')});
@@ -1251,7 +1503,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
       var t = (a.decision === 'comment' ? '' : decisionLabel(a, it) + ' · ') + (a.comment || '');
       msgs.push({at: a.at, who: 'you', text: t, anchor: a.anchor, status: a.status});
     });
-    msgs.sort(function (a, b) { return String(a.at).localeCompare(String(b.at)); });
+    msgs.sort(function (a, b) { return tms(a.at) - tms(b.at); });
     if (!msgs.length) return null;
     var box = el('div', {class: 'thread'});
     function msgEl(m) {
@@ -1270,23 +1522,118 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     msgs.forEach(function (m) { box.appendChild(msgEl(m)); });
     return box;
   }
-  function card(it) {
-    var b = bucket(it), p = prioName(it);
-    var node = el('article', {class: 'card ' + it.kind + ' ' + b + ' p-' + p, id: it.id, 'data-id': it.id, tabindex: '-1'});
+  /* notes from earlier versions, on the current one: what was said, where, and whether it was addressed */
+  function carriedBox(it) {
+    var list = carried(it); if (!list.length) return null;
+    var notes = list.filter(function (c) { return c.note; }), open = notes.filter(function (c) { return !c.done; });
+    var froms = []; list.forEach(function (c) { var l = vlabel(c.from); if (froms.indexOf(l) < 0) froms.push(l); });
+    var box = el('div', {class: 'carry' + (open.length ? '' : ' done'), 'aria-label': 'Notes from earlier versions'});
+    var replied = list.filter(function (c) { return c.note && !c.done && replyTo(it, c); }).length;
+    box.appendChild(el('div', {class: 'carry-head'}, [el('span', {text: '💬 ' + (notes.length ? notes.length + ' note' + (notes.length === 1 ? '' : 's') : 'Your answer') + ' from ' + froms.join(', ') + ', carried over'}),
+      open.length ? el('span', {class: 'open', text: open.length + ' open' + (replied ? ' (' + replied + ' answered by the orchestrator: check them)' : '')}) : notes.length ? el('span', {class: 'ok', text: '✓ all resolved'}) : null]));
+    function row(c) {
+      var a = c.a, an = a.anchor, li = el('li', {class: c.note ? '' : 'decision'}), rep = c.note ? replyTo(it, c) : null;
+      li.appendChild(el('span', {class: 'v', text: vlabel(c.from)}));
+      var t = (a.decision !== 'comment' ? decisionLabel(a, c.from) + (c.note ? ' · ' : '') : '') + (a.comment || '');
+      li.appendChild(el('span', {class: 'tx', text: t}));
+      var stt = el('span', {class: 'stt'});
+      if (c.note) {
+        stt.appendChild(el('span', {class: c.done ? 'k' : rep ? 'r' : 'o', text: c.done ? '✓ resolved' : rep ? 'answered: check it' : 'open'}));
+        if (S.live) {
+          var mk = el('button', {type: 'button', class: 'btn small ghost', text: c.done ? 'Reopen' : 'Resolve'});
+          on(mk, 'click', function () { answer(c.from.id, {decision: c.done ? 'unresolve' : 'resolve', anchor: an && an.type !== 'msg' ? an : {type: 'msg', id: a.id}}); });
+          stt.appendChild(mk);
+        }
+      }
+      li.appendChild(stt);
+      /* where the line is now comes first; the old version's line is the small print */
+      var where = an && an.type !== 'msg' ? anchorLink(c.from, an) : null, now = null;
+      if (an && an.type === 'line') {
+        var ln = lineNow(it, an);
+        if (ln && ln.loc) {
+          var cur = vlabel(it), st = ln.loc.status;
+          now = st === 'removed' ? el('span', {class: 'gone', text: 'this line is gone in ' + cur}) : el('button', {type: 'button', class: 'now',
+            text: (st === 'same' ? 'Same line in ' + cur : st === 'moved' ? 'Now line ' + ln.loc.line + ' of ' + cur : 'Rewritten in ' + cur + ': line ' + ln.loc.line) + ' →'});
+          if (st !== 'removed') on(now, 'click', function () { setCurrent(it.id, true); openDoc(it, ln.doc.path, ln.loc.line); });
+        }
+      }
+      li.appendChild(el('span', {class: 'meta'}, [now, now ? ' · ' : '', 'you, ' + when(a.at) + ' on ' + vlabel(c.from), where ? ': ' : '', where]));
+      if (rep) li.appendChild(el('span', {class: 'reply'}, [el('b', {text: 'Orchestrator: '}), rep.text]));
+      return li;
+    }
+    var ol = el('ol'); list.filter(function (c) { return !c.done; }).forEach(function (c) { ol.appendChild(row(c)); });
+    if (ol.childNodes.length) box.appendChild(ol);
+    var done = list.filter(function (c) { return c.done; });
+    if (done.length) {
+      var d = el('details', {}, [el('summary', {text: 'Resolved (' + done.length + ')'})]), ol2 = el('ol');
+      done.forEach(function (c) { ol2.appendChild(row(c)); }); d.appendChild(ol2); box.appendChild(d);
+    }
+    return box;
+  }
+  /* the orchestrator's latest answer to a carried note (a reply in its thread, on the old version or the current one) */
+  function replyTo(it, c) {
+    var best = null;
+    [c.from, it].forEach(function (src) {
+      (src.thread || []).forEach(function (m) {
+        var an = m.anchor; if (!an || m.who === 'you') return;
+        var hit = an.type === 'msg' ? an.id === c.a.id : noteKey({anchor: an, id: ''}) === c.key && (an.type !== 'line' || (an.item || src.id) === c.from.id || src === c.from);
+        if (hit && (!best || tms(m.at) > tms(best.at))) best = m;
+      });
+    });
+    return best;
+  }
+  function focusComment(id) {
+    var n = document.getElementById(id); if (!n) return;
+    scrollToItem(id, 'smooth'); setCurrent(id, true);
+    var r = refs[id]; if (r) setTimeout(function () { r.ta.focus({preventScroll: true}); }, 350);
+  }
+  /* opts: {nested: inside another card, old: the current version (this card is an earlier one), context: the card is
+     here only for decisions inside it that match the view, kids: those decisions} */
+  function card(it, opts) {
+    opts = opts || {};
+    var b = bucket(it), p = prioName(it), head = opts.old || null, isCtx = !!opts.context;
+    var node = el('article', {class: 'card ' + it.kind + ' ' + (head ? 'closed' : b) + ' p-' + p + (opts.nested ? ' nested' : '') + (head ? ' old' : '') + (isCtx ? ' context' : ''),
+      id: it.id, 'data-id': it.id, tabindex: '-1'});
+    var lab = vlabel(it), prev = earlier(it), fr = head ? '' : fresh(it);
+    var askedOn = it.parent && item(it.parent) && isOld(item(it.parent)) ? item(it.parent) : null;
     var later = el('button', {type: 'button', class: 'later', title: snoozeActive(it) ? 'Snoozed: change or unsnooze (s)' : 'Snooze: address it later (s)', 'data-menu-owner': '1', text: snoozeActive(it) ? 'Snoozed ▾' : 'Snooze ▾'});
     on(later, 'click', function (ev) { ev.stopPropagation(); if (openMenu && openMenu.parentNode === later.parentNode) { closeMenus(); return; } setCurrent(it.id, true); snoozeMenu(it, later); });
     var tags = (it.tags || []).map(function (t) { var x = el('button', {type: 'button', class: 'tag', title: 'Show only #' + t, text: '#' + t}); on(x, 'click', function () { setFilter('tag', [t]); }); return x; });
     var s = snoozeOf(it);
     node.appendChild(el('div', {class: 'card-head'}, [
       el('span', {class: 'kind ' + it.kind, text: KIND_LABEL[it.kind] || it.kind}),
-      p !== 'normal' ? el('span', {class: 'prio ' + p, title: 'Importance: ' + PRIO_LABEL[p], text: PRIO_LABEL[p]}) : null,
-      b === 'answered' ? el('span', {class: 'pill ans', text: 'answered'}) : null,
-      b === 'closed' ? el('span', {class: 'pill done', text: 'done'}) : null,
+      fr && !(lab && fr === 'new version') ? el('span', {class: 'pill ' + (fr === 'updated' || fr === 'new reply' ? 'upd' : 'new'), title: 'Since your last visit (' + when(S.since) + ')', text: fr}) : null,
+      lab ? el('span', {class: 'pill ver' + (head ? '' : fr === 'new version' ? ' new' : prev.length ? ' cur' : ''),
+        title: head ? 'An earlier version' : prev.length ? 'The current version; it replaces ' + prev.map(vlabel).join(', ') + (fr ? ' (new since your last visit)' : '') : 'Version',
+        text: lab + (fr === 'new version' ? ' · new' : '')}) : null,
+      askedOn ? el('span', {class: 'pill old', title: 'Asked about ' + vlabel(askedOn) + '; the ' + noun(askedOn) + ' is now ' + vlabel(headOf(askedOn)), text: 'asked on ' + vlabel(askedOn)}) : null,
+      p !== 'normal' && !head ? el('span', {class: 'prio ' + p, title: 'Importance: ' + PRIO_LABEL[p], text: PRIO_LABEL[p]}) : null,
+      b === 'answered' && !head ? el('span', {class: 'pill ans', text: 'answered'}) : null,
+      b === 'closed' && !head ? el('span', {class: 'pill done', text: 'done'}) : null,
       b === 'snoozed' && s ? el('span', {class: 'pill snz', title: s.by === 'agent' ? 'Snoozed by the orchestrator' : 'You snoozed it', text: s.later ? 'snoozed: someday' : 'snoozed until ' + dayName(s.until)}) : null,
       snoozeDue(it) && b !== 'closed' ? el('span', {class: 'pill due', text: 'back from snooze'}) : null]
-      .concat(tags).concat([el('span', {class: 'head-r'}, [b === 'open' || b === 'snoozed' ? later : null, el('a', {class: 'when', href: '#item=' + encodeURIComponent(it.id), title: 'Link to this item · added ' + it.added, text: ago(it.added)})])])));
+      .concat(opts.nested ? [] : tags).concat([el('span', {class: 'head-r'}, [(b === 'open' || b === 'snoozed') && !head && !isCtx ? later : null, el('a', {class: 'when', href: '#item=' + encodeURIComponent(it.id), title: 'Link to this item · added ' + it.added, text: ago(it.added)})])])));
+    if (head) {
+      var go = el('button', {type: 'button', class: 'linkbtn', text: 'Go to ' + vlabel(head) + ' →'});
+      on(go, 'click', function () { focusComment(head.id); });
+      var by = newerOf(it) || head;
+      node.appendChild(el('div', {class: 'superseded', role: 'note'}, [el('b', {text: 'Superseded by ' + vlabel(by) + (by !== head ? ' (current: ' + vlabel(head) + ')' : '')}),
+        el('span', {text: (it.superseded_at ? when(it.superseded_at) + '. ' : '') + 'Kept for reference; your notes on it are listed on ' + vlabel(head) + '.'}), go]));
+    }
     node.appendChild(el('h3', {text: it.title}));
     node.appendChild(el('p', {class: 'summary', text: it.summary}));
+    if (isCtx) {
+      var where = el('button', {type: 'button', class: 'linkbtn', text: b === 'open' ? 'Review it →' : 'Show the whole card →'});
+      on(where, 'click', function () { S.f = {view: b, kind: [], prio: [], tag: [], q: ''}; navigate({item: it.id}); render(); scrollToItem(it.id, 'auto'); });
+      var state = b === 'answered' ? 'You answered this ' + noun(it) + (it.answer ? ' (' + decisionLabel(it.answer, it) + ')' : '') : b === 'closed' ? 'This ' + noun(it) + ' is done'
+        : b === 'snoozed' ? 'You snoozed this ' + noun(it) : 'This ' + noun(it) + ' still needs your review';
+      node.appendChild(el('p', {class: 'ctx-line'}, [document.createTextNode(state + (S.f.view === 'open' ? '. One of its decisions still needs you. ' : '. It is shown here because of the decision below. ')), where]));
+      var dc = docButtons(it); if (dc) node.appendChild(dc);
+      node.appendChild(kidsBox(it, opts.kids || []));
+      bindCurrent(node, it);
+      return node;
+    }
+    var cb = head ? null : carriedBox(it); if (cb) node.appendChild(cb);
     if (it.body_html) {
       var body = el('div', {class: 'body', html: it.body_html.split('@@ROOT@@').join(ROOT)});
       body.querySelectorAll('a[href]').forEach(function (a) {
@@ -1310,17 +1657,49 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
       else node.appendChild(body);
     }
     if (it.default) node.appendChild(el('div', {class: 'default'}, [el('span', {text: 'If you do nothing: '}), el('b', {text: it.default})]));
-    var dl = docButtons(it); if (dl) node.appendChild(dl);
+    var dl = docButtons(it, !!head); if (dl) node.appendChild(dl);
     (it.compare || []).forEach(function (c) { node.appendChild(compareBlock(c, it)); });
     var mg = it.kind === 'audition' ? null : mediaGrid(it.media, it);
     if (mg) node.appendChild(mg);
     if (it.how) node.appendChild(el('details', {class: 'how'}, [el('summary', {text: it.kind === 'action' ? 'How to do it (copy-paste)' : 'Commands'}), el('pre', {text: it.how})]));
     var th = thread(it); if (th) node.appendChild(th);
-    node.appendChild(controls(it));
+    /* the decisions about this document come before its own verdict, so it is not approved with questions open */
+    var kids = !head && !opts.nested ? S.kids[it.id] || [] : [];
+    if (kids.length) node.appendChild(kidsBox(it, opts.kids || null));
+    if (!head) {
+      var openKids = kids.filter(function (k) { return bucket(k) === 'open'; }).length;
+      if (openKids) node.appendChild(el('p', {class: 'verdict-hint'}, [(openKids === 1 ? '1 decision above still needs' : openKids + ' decisions above still need') + ' you. Your verdict on the ' + noun(it) + ' itself:']));
+      node.appendChild(controls(it, {compact: !!opts.nested}));
+    }
     if (it.kind === 'audition' && (it.media || []).length) node.appendChild(el('details', {class: 'more'}, [el('summary', {text: (it.media.length === 1 ? it.media[0].caption || 'Clip' : it.media.length + ' clips')}), mediaGrid(it.media, it)]));
-    on(node, 'focusin', function () { setCurrent(it.id); });
-    on(node, 'pointerdown', function () { setCurrent(it.id); });
+    if (!head && prev.length) {
+      var ev = el('details', {class: 'earlier versions'}, [el('summary', {text: 'Earlier versions (' + prev.length + '): ' + prev.map(vlabel).join(', ')})]);
+      prev.forEach(function (o) { ev.appendChild(card(o, {old: it, nested: true})); });
+      node.appendChild(ev);
+    }
+    bindCurrent(node, it);
     return node;
+  }
+  function bindCurrent(node, it) {
+    on(node, 'focusin', function (ev) { if (ev.target.closest('.card') === node) { setCurrent(it.id); markSeen(it.id); } });
+    on(node, 'pointerdown', function (ev) { if (ev.target.closest('.card') === node) { setCurrent(it.id); markSeen(it.id); } });
+  }
+  /* the decisions that belong to a document, inside its card: the ones in this view first, the rest folded */
+  function kidsBox(it, shown) {
+    var all = (S.kids[it.id] || []).slice().sort(function (a, b) { return tms(a.added) - tms(b.added); });
+    shown = shown || all.filter(function (k) { return bucket(k) === 'open'; });
+    var rest = all.filter(function (k) { return shown.indexOf(k) < 0; });
+    var openN = all.filter(function (k) { return bucket(k) === 'open'; }).length;
+    var box = el('section', {class: 'kids', 'aria-label': 'Decisions on this ' + noun(it)},
+      [el('h4', {}, ['Decisions on this ' + noun(it) + ' · ', el('b', {text: openN ? openN + ' need' + (openN === 1 ? 's' : '') + ' you' : 'none open'}), document.createTextNode(all.length > openN ? ' · ' + (all.length - openN) + ' answered or done' : '')])]);
+    all.filter(function (k) { return shown.indexOf(k) >= 0; }).forEach(function (k) { box.appendChild(card(k, {nested: true})); });
+    if (rest.length) {
+      var restOpen = rest.filter(function (k) { return bucket(k) === 'open'; }).length;
+      var d = el('details', {class: 'earlier', open: restOpen && !shown.length ? true : null}, [el('summary', {text: (shown.length ? 'Other decisions on it' : 'Decisions on it') + ' (' + rest.length + (restOpen ? ', ' + restOpen + ' still need' + (restOpen === 1 ? 's' : '') + ' you' : '') + ')'})]);
+      rest.forEach(function (k) { d.appendChild(card(k, {nested: true})); });
+      box.appendChild(d);
+    }
+    return box;
   }
   function setCurrent(id, push) {
     if (S.current === id) return;
@@ -1338,6 +1717,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
   var pinned = null, autoScroll = 0;
   function scrollToItem(id, behavior) {
     var n = document.getElementById(id); if (!n) return;
+    for (var pn = n.parentElement; pn; pn = pn.parentElement) if (pn.tagName === 'DETAILS') pn.open = true;
     autoScroll = Date.now();
     n.scrollIntoView({block: 'start', behavior: behavior || 'smooth'});
     pinned = {id: id, until: Date.now() + 2500};
@@ -1355,28 +1735,44 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     var list = document.getElementById('list'), y = window.scrollY;
     players.forEach(function (p) { try { p.pause(); } catch (e) {} });
     refs = {}; players = []; list.textContent = '';
-    crumbs(); views(); facetsAll();
-    var items = visible();
-    if (!items.length) {
+    reindex();
+    crumbs(); views(); facetsAll(); newbar();
+    var groups = grouped();
+    if (!groups.length) {
       var filtered = S.f.kind.length || S.f.prio.length || S.f.tag.length || S.f.q;
       list.appendChild(el('div', {class: 'empty'}, [el('b', {text: filtered ? 'Nothing matches these filters.' : S.f.view === 'open' ? 'Nothing waiting for you.' : 'Nothing here.'}),
         filtered ? 'Clear the filters above to see everything.' : S.f.view === 'open' ? 'Answered items are under "Answered", snoozed ones under "Snoozed", finished ones under "Done".' : '']));
     }
-    var last = null, groups = {};
-    items.forEach(function (it) { var g = S.f.view === 'all' ? bucket(it) : prioName(it); groups[g] = (groups[g] || 0) + 1; });
-    var showHeads = S.f.view === 'all' || Object.keys(groups).length > 1;
-    items.forEach(function (it) {
-      var g = S.f.view === 'all' ? bucket(it) : prioName(it);
-      if (showHeads && g !== last) {
-        last = g;
-        var title = S.f.view === 'all' ? VIEW_HEAD[g] : PRIO_LABEL[g];
-        list.appendChild(el('h2', {class: 'sec'}, [S.f.view === 'all' ? null : el('span', {class: 'dot', style: 'background:var(--p-' + g + ')'}), el('span', {text: title}), el('span', {class: 'n', text: String(groups[g])})]));
-      }
-      list.appendChild(card(it));
+    var showHeads = S.f.view === 'all' || groups.length > 1 || (groups[0] && groups[0].key === 'now');
+    groups.forEach(function (g) {
+      if (showHeads && g.title) list.appendChild(el('h2', {class: 'sec' + (g.key === 'now' ? ' now' : '')}, [g.key === 'now' ? el('span', {class: 'dot', style: 'background:var(--p-urgent)'}) : null,
+        el('span', {text: g.title}), el('span', {class: 'n', text: String(g.n)})]));
+      g.units.forEach(function (u) { list.appendChild(card(u.top, {context: !u.self, kids: u.kids})); });
     });
     markCurrent();
     renderMessages();
     window.scrollTo(0, y);
+  }
+  /* "3 new since your last visit": a line above the list, with a button that walks through them */
+  function newbar() {
+    var bar = document.getElementById('newbar'); if (!bar) return;
+    var list = S.items.filter(function (it) { return !isOld(it) && bucket(it) !== 'closed' && fresh(it); });
+    bar.hidden = !list.length; bar.textContent = '';
+    if (!list.length) return;
+    var n = {}; list.forEach(function (it) { var f = fresh(it); n[f] = (n[f] || 0) + 1; });
+    var parts = [['new version', 'new version', 'new versions'], ['new', 'new item', 'new items'], ['new reply', 'new reply', 'new replies'], ['updated', 'update', 'updates']]
+      .filter(function (k) { return n[k[0]]; }).map(function (k) { return n[k[0]] + ' ' + (n[k[0]] === 1 ? k[1] : k[2]); });
+    bar.appendChild(el('b', {text: '● ' + parts.join(' · ')}));
+    bar.appendChild(el('span', {text: 'since your last visit (' + when(S.since) + ')'}));
+    var nx = el('button', {type: 'button', class: 'btn small ghost', text: 'Next new ↓'});
+    on(nx, 'click', function () {
+      var rank = function (c) { var f = fresh(item(c.id)); return f === 'new version' ? 0 : f === 'new' ? 1 : 2; };
+      var cards = visibleCards().filter(function (c) { var it = item(c.id); return it && fresh(it); }).sort(function (a, b) { return rank(a) - rank(b); });
+      if (!cards.length) { toast('The new ones are under another view: try All.'); return; }
+      var i = cards.findIndex(function (c) { return c.id === S.current; });
+      var n = cards[(i + 1) % cards.length]; setCurrent(n.id); scrollToItem(n.id, 'smooth');
+    });
+    bar.appendChild(nx);
   }
   function renderMessages() {
     var box = document.getElementById('msg-thread'); box.textContent = '';
@@ -1393,6 +1789,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
       var byId = {}; j.items.forEach(function (it) { byId[it.id] = it; });
       S.items = snap.items.map(function (it) { return byId[it.id] ? byId[it.id] : it; });
       j.items.forEach(function (it) { if (!snap.items.some(function (s) { return s.id === it.id; })) S.items.push(it); });
+      reindex();
       document.getElementById('banner').hidden = true;
       return api('GET', '/messages').then(function (m) { S.messages = m.messages || []; }, function () {});
     }, function (e) {
@@ -1403,11 +1800,31 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     });
   }
   function busy() { return typing || !!ov || !!lb || !!openMenu || players.some(function (p) { return !p.paused; }); }
+  var warned = {};
+  function newerWhileBusy() {
+    api('GET', '/review/items').then(function (j) {
+      var fresh = {}; j.items.forEach(function (x) { fresh[x.id] = x; });
+      S.items.forEach(function (it) {
+        var nx = fresh[it.id], r = refs[it.id];
+        if (!nx || !nx.superseded_by || isOld(it) || warned[it.id] || !fresh[nx.superseded_by]) return;
+        if (it.id !== S.current && !(r && r.ta.value.trim()) && !(ov && ov.item === it.id)) return;
+        warned[it.id] = 1;
+        var nv = fresh[nx.superseded_by], bar = document.getElementById('newer');
+        bar.textContent = ''; bar.hidden = false;
+        bar.appendChild(el('b', {text: (nv.version || 'A new version') + ' of “' + it.title + '” just arrived.'}));
+        bar.appendChild(el('span', {text: ' You are on ' + (vlabel(it) || 'the old one') + '. Anything you send there is kept and listed on ' + (nv.version || 'the new one') + '. '}));
+        var go = el('button', {type: 'button', class: 'btn small', text: 'Show ' + (nv.version || 'it')});
+        on(go, 'click', function () { bar.hidden = true; closeOverlay(true); load().then(function () { render(); focusComment(nv.id); }); });
+        bar.appendChild(go);
+      });
+    }, function () {});
+  }
   function poll() {
     if (!LIVE) return;
     api('GET', '/version').then(function (v) {
       var sig = JSON.stringify([v.review_mtime, v.tasks_mtime, v.review_page_mtime]);
       if (version === null) { version = sig; return; }
+      if (sig !== version && busy()) newerWhileBusy();
       if (sig !== version && !busy()) {
         var old = version; version = sig;
         if (v.review_page_mtime && JSON.parse(old)[2] !== v.review_page_mtime) { location.reload(); return; }
@@ -1418,8 +1835,9 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
   setInterval(function () { if (!busy() && S.items.some(function (it) { return snoozeOf(it) && snoozeDue(it) !== it._due; })) { S.items.forEach(function (it) { it._due = snoozeDue(it); }); render(); } }, 60000);
 
   /* ---- keyboard ---- */
+  function visibleCards() { return Array.prototype.slice.call(document.querySelectorAll('#list .card')).filter(function (c) { return c.getClientRects().length > 0; }); }
   function currentCard() {
-    var cards = Array.prototype.slice.call(document.querySelectorAll('.card'));
+    var cards = visibleCards();
     if (!cards.length) return null;
     var idx = cards.findIndex(function (c) { return c.id === S.current; });
     if (idx < 0) { var top = cards.find(function (c) { return c.getBoundingClientRect().bottom > 140; }) || cards[0]; idx = cards.indexOf(top); setCurrent(top.id); }
@@ -1458,7 +1876,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
       case '/': ev.preventDefault(); document.getElementById('q').focus(); break;
       case 'a': if (it && (it.kind === 'approve' || it.kind === 'action' || it.kind === 'info')) answer(id, {decision: it.kind === 'approve' ? 'approve' : it.kind === 'action' ? 'done' : 'read'}); break;
       case 'n': if (it && (it.kind === 'approve' || it.kind === 'action')) answer(id, {decision: 'needs_changes'}); break;
-      case 'c': if (r) { ev.preventDefault(); r.ta.focus(); } break;
+      case 'c': if (r) { ev.preventDefault(); if (r.show) r.show(); r.ta.focus(); } break;
       case 'o': if (id) { var d = document.getElementById(id).querySelector('.doc'); if (d) d.click(); } break;
       case 's': if (id) { var l = document.getElementById(id).querySelector('.later'); if (l) { ev.preventDefault(); l.click(); } } break;
       case 'x': if (id) { var w = document.getElementById(id).querySelector('.ab .btn'); if (w) w.click(); } break;
@@ -1483,8 +1901,13 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
     scrollTimer = setTimeout(function () {
       if (ov || pinned || Date.now() - autoScroll < 900) return;
       var line = document.getElementById('top').getBoundingClientRect().bottom + 120;     // the reading line
-      var cards = document.querySelectorAll('.card'), pick = null;
-      for (var i = 0; i < cards.length; i++) { var rc = cards[i].getBoundingClientRect(); if (rc.bottom > line) { pick = cards[i]; break; } }
+      var cards = visibleCards(), pick = null, first = null;       // the innermost card under the reading line
+      for (var i = 0; i < cards.length; i++) {
+        var rc = cards[i].getBoundingClientRect();
+        if (rc.top <= line && rc.bottom > line) pick = cards[i];
+        if (!first && rc.bottom > line) first = cards[i];
+      }
+      pick = pick || first;
       if (window.scrollY < 20) { if (S.current) { S.current = null; markCurrent(); navigate({item: ''}, true); crumbs(); } return; }
       if (pick && pick.id !== S.current) setCurrent(pick.id);
     }, 160);
@@ -1513,6 +1936,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px;line-height:1.6;text-al
   }
   function sizeHead() { document.documentElement.style.setProperty('--head', document.getElementById('top').offsetHeight + 'px'); }
   window.addEventListener('resize', sizeHead);
+  reindex();
   load().then(function () { applyRoute(true); sizeHead(); poll(); });
 })();
 </script>

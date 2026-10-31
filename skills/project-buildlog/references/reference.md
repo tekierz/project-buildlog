@@ -4,7 +4,7 @@
 
 | Path | In git | Notes |
 |---|---|---|
-| `tools/buildlog/buildlog.json` | yes | `generator`, `name`, `title`, `slug`, `root` (relative to this file), `port`, `page`, `tasks`, `tools_dir`, `service`, `signature_header`, `evidence_dirs`, `media_dir`, `sections`. No secrets. |
+| `tools/buildlog/buildlog.json` | yes | `generator`, `name`, `title`, `slug`, `root` (relative to this file), `port`, `page`, `tasks`, `tools_dir`, `service`, `signature_header`, `evidence_dirs`, `media_dir`, `sections`, optional `network` (`local` or `lan`, see below) and `extra_hosts`. No secrets. |
 | `tools/buildlog/buildlog_server.py`, `buildlog_tasks.py`, `buildlog_progress.py`, `buildlog_agent.py` | yes | Copies of `SKILL_DIR/scripts/`. They find `buildlog.json` next to themselves. Refresh them by re-running `setup.py init`. |
 | `tools/buildlog/tests/test_buildlog_server.py`, `test_buildlog_progress.py`, `test_buildlog_agent.py` | yes | Run with `python3 -I`. They also check the project's own page and task file. |
 | `tools/buildlog/<service>.service` | yes | A copy of the installed unit. It holds absolute paths for this machine. |
@@ -21,7 +21,7 @@
 | `~/.local/state/<name>/inbox.jsonl` | never | Append-only: `{"type":"message","payload":...}` and `{"type":"delivered","id","at","http","via"}`. |
 | `~/.local/state/<name>/read.json` | never | Ids handled from the local inbox (`inbox --mark-read`). |
 
-## HTTP API (127.0.0.1 only)
+## HTTP API (127.0.0.1 only, unless you opt in to the network)
 
 Every request must carry `Host: 127.0.0.1:PORT` or `localhost:PORT`; anything else gets 403. Every POST also needs:
 - `Content-Type: application/json`
@@ -39,6 +39,21 @@ OPTIONS, PUT, DELETE and PATCH get 405 without CORS headers. Responses carry `Ca
 | `GET /api/version` | `{"mtime": page mtime, "tasks_mtime", "name", "review_mtime", "review_page_mtime"}`. The pages poll it to reload themselves. |
 | `GET /api/review/items`, `POST /api/review/answer` | The review hub; see [review-hub.md](review-hub.md). |
 | `GET /` | 302 to the page, unless an index.html exists. |
+
+### Opening the pages from another device (opt-in)
+
+By default the server listens on 127.0.0.1 only. To read the build log and the review hub from a phone or another computer on your Tailscale network or home LAN, add to `tools/buildlog/buildlog.json` and restart the server:
+
+```json
+"network": "lan",
+"extra_hosts": ["my-desktop.example.lan"]
+```
+
+- The server then listens on every interface, but refuses any client outside loopback, Tailscale (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) and the private LAN ranges (`10/8`, `172.16/12`, `192.168/16`, link-local) before reading the request.
+- It answers only Host names that are this machine's: its host name and `.local` name, the addresses it resolves to, its Tailscale name and addresses (from `tailscale status --json` when the CLI is installed), and `extra_hosts`. Any other Host gets 403, which blocks DNS rebinding. POSTs still need `X-Buildlog: 1` and a matching Origin.
+- Pages are generated with `http://127.0.0.1:PORT` links. For a browser on another host the server rewrites those links in HTML responses to the host it used, so moving between the build log and the hub keeps working.
+- **Firewall:** the server's own checks are not a firewall. Anyone who can reach the port on an allowed range can read every file the server serves and answer the review hub as you. There is no login. Open the port only to networks you trust. On Windows, for example, run this from an elevated PowerShell: `New-NetFirewallRule -DisplayName "buildlog (Tailscale)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort PORT -RemoteAddress 100.64.0.0/10`. Add a second rule with `-RemoteAddress LocalSubnet -Profile Private` for the home LAN. On Linux with ufw: `sudo ufw allow in on tailscale0 to any port PORT proto tcp`. Do not mark a public Wi-Fi network as Private.
+- Leave `network` out (or `"local"`) to go back to loopback only.
 
 Message `kind` values:
 - `task_update` needs `task_id` and `done`.

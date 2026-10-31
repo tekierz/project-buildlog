@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Local server for a project's build log page and its "Your tasks" panel.
 
-Serves the project root read-only on 127.0.0.1 and adds a small JSON API:
+Serves the project root read-only on 127.0.0.1 and adds a small JSON API. With "network": "lan" in
+buildlog.json (opt-in) it listens on every interface but answers only loopback, Tailscale and private-LAN
+clients, and only Host names that are this machine's (plus "extra_hosts"); see references/reference.md.
 
   GET  /api/tasks        tasks from the task file merged with local state
                          (done flag, note, last send, replies, last note)
@@ -44,13 +46,16 @@ import datetime
 import hashlib
 import hmac
 import http.server
+import ipaddress
 import json
 import mimetypes
 import os
 from pathlib import Path
 import re
 import signal
+import socket
 import socketserver
+import subprocess
 import sys
 import tempfile
 import threading
@@ -61,6 +66,10 @@ import urllib.request
 import uuid
 
 HOST = "127.0.0.1"
+# "network": "lan" in buildlog.json: listen on every interface but answer only these clients (loopback, Tailscale,
+# private LAN ranges). Anything else is refused before a byte of the request is read.
+LAN_NETWORKS = ("127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48",
+                "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fe80::/10")
 DEFAULT_PORT = 33650
 WEBHOOK_TIMEOUT = 5
 RETRY_SECONDS = 180
@@ -132,6 +141,17 @@ def _ts(text):
     except ValueError:
         return datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
     return when if when.tzinfo else when.replace(tzinfo=datetime.timezone.utc)
+
+
+def _line_fp(text):
+    """A line's content fingerprint: FNV-1a over its first 80 lowercase letters and digits (review/md_render.py line_fp)."""
+    t = re.sub(r"[^a-z0-9]+", "", str(text or "").lower())[:80]
+    if not t:
+        return ""
+    h = 0x811c9dc5
+    for ch in t:
+        h = ((h ^ ord(ch)) * 0x01000193) & 0xffffffff
+    return "%08x" % h
 
 
 def write_atomic(path, data, mode=0o600):
@@ -222,8 +242,11 @@ class BuildlogApp:
         except (OSError, ValueError):
             pass
 
-    def set_origin(self, port):
-        self.allowed_hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
+    def set_origin(self, port, names=()):
+        """Host headers (and Origins) the server answers to: loopback, plus `names` (this machine's LAN / Tailscale
+        addresses and host names) when it listens on the network. A Host outside this set is refused (DNS rebinding)."""
+        hosts = {"127.0.0.1", "localhost"} | {n.lower().rstrip(".") for n in names if n}
+        self.allowed_hosts = {("[%s]" % h if ":" in h else h) + ":%d" % port for h in hosts}
         self.allowed_origins = {"http://" + h for h in self.allowed_hosts}
 
     # ---- webhook config ------------------------------------------------
@@ -490,10 +513,14 @@ class BuildlogApp:
 
     @staticmethod
     def _clean_anchor(anchor):
-        if not isinstance(anchor, dict) or anchor.get("type") not in ("line", "time"):
-            raise ApiError(400, "anchor must be {type: line|time, ...}")
+        if not isinstance(anchor, dict) or anchor.get("type") not in ("line", "time", "msg"):
+            raise ApiError(400, "anchor must be {type: line|time|msg, ...}")
         clean = {"type": anchor["type"]}
-        if anchor["type"] == "line":
+        if anchor["type"] == "msg":                 # a note without a line or time: its own thread
+            if not (isinstance(anchor.get("id"), str) and MSG_ID_RE.match(anchor["id"])):
+                raise ApiError(400, "anchor.id must be a message id")
+            clean["id"] = anchor["id"]
+        elif anchor["type"] == "line":
             try:
                 clean["line"] = int(anchor.get("line"))
             except (TypeError, ValueError):
@@ -506,6 +533,14 @@ class BuildlogApp:
                 raise ApiError(400, "anchor.time_s must be a number")
             clean["media"] = str(anchor.get("media", ""))[:300]
         clean["excerpt"] = str(anchor.get("excerpt", ""))[:300]
+        if clean["type"] == "line":
+            # the line's content too, so the note finds its line again after the document is rewritten
+            # (review/md_render.py line_fp: the same fingerprint the pages and review.py compute)
+            fp = anchor.get("fp")
+            clean["fp"] = fp if isinstance(fp, str) and re.match(r"^[0-9a-f]{8}$", fp) else _line_fp(clean["excerpt"])
+            for k in ("who", "block"):
+                if isinstance(anchor.get(k), (str, int)) and str(anchor[k]).strip():
+                    clean[k] = str(anchor[k])[:80]
         return clean
 
     @staticmethod
@@ -513,7 +548,34 @@ class BuildlogApp:
         """The comment thread an anchor belongs to: line:DOC#LINE or time:MEDIA@SECONDS (review.py uses the same)."""
         if anchor["type"] == "line":
             return "line:%s#%d" % (anchor.get("doc", ""), anchor["line"])
+        if anchor["type"] == "msg":
+            return "msg:%s" % anchor["id"]
         return "time:%s@%.1f" % (anchor.get("media", ""), anchor["time_s"])
+
+    @staticmethod
+    def _made_on(item, anchor, seen):
+        """The version a note was made on, and why it is not the current one ('' when it is). The page says what it
+        showed (seen: the item's rev and version, or the document's content hash); the item file says what is current
+        (review.py writes version, rev, docs[].hash and superseded_by)."""
+        current = {"item": item["id"], "version": str(item.get("version") or ""), "rev": str(item.get("rev") or "")}
+        if anchor and anchor.get("type") == "line":
+            current["doc_hash"] = next((str(d.get("hash") or "") for d in item.get("docs") or []
+                                        if isinstance(d, dict) and d.get("path") == anchor.get("doc")), "")
+        made = dict(current)
+        claimed = {}
+        if isinstance(seen, dict):
+            for k in ("version", "rev", "doc_hash"):
+                v = seen.get(k)
+                if isinstance(v, str) and v and len(v) <= 60:
+                    made[k] = claimed[k] = v
+        why = ""
+        if item.get("superseded_by"):
+            why = "made on %s, which %s replaced" % (made.get("version") or item["id"], item["superseded_by"])
+        elif claimed.get("doc_hash") and current.get("doc_hash") and claimed["doc_hash"] != current["doc_hash"]:
+            why = "the page showed an older copy of the document"
+        elif claimed.get("rev") and current["rev"] and claimed["rev"] != current["rev"]:
+            why = "the page showed an older revision of the item"
+        return made, why
 
     def review_answer(self, body):
         item_id = body.get("item_id")
@@ -564,6 +626,10 @@ class BuildlogApp:
                    "task_id": "", "task_title": "", "done": "", "note": comment, "sent_at": now_sec()}
         record = {"id": payload["id"], "at": payload["sent_at"], "decision": decision, "choice": choice or "",
                   "comment": comment, "anchor": anchor, "status": "queued"}
+        made, why = self._made_on(item, anchor, body.get("seen"))
+        payload["made_on"] = record["made_on"] = made
+        if why:
+            payload["outdated"] = record["outdated"] = why
         if decision == "snooze":
             payload["until"] = record["until"] = until
             payload["later"] = record["later"] = later
@@ -945,6 +1011,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         real = self.app.resolve_static(self.path)
         size = real.stat().st_size
+        ctype = content_type(real)
+        host = self.headers.get("Host", "")
+        local = "127.0.0.1:%d" % self.server.server_address[1]
+        if ctype.startswith("text/html") and host and host != local:
+            # pages are generated with http://127.0.0.1:PORT links; a LAN / Tailscale browser gets its own host
+            # (already checked against allowed_hosts) so the links between pages keep working
+            body = real.read_bytes()
+            for old in (b"http://" + local.encode(), b"http://localhost:%d" % self.server.server_address[1]):
+                body = body.replace(old, b"http://" + host.encode("ascii", "replace"))
+            self._headers(200, ctype, len(body), [("Last-Modified", self.date_time_string(real.stat().st_mtime))])
+            if self.command != "HEAD":
+                self.wfile.write(body)
+            return
         start, end = 0, size - 1
         status = 200
         extra = [("Last-Modified", self.date_time_string(real.stat().st_mtime)), ("Accept-Ranges", "bytes")]
@@ -956,7 +1035,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             start, end = span
             status = 206
             extra.append(("Content-Range", "bytes %d-%d/%d" % (start, end, size)))
-        self._headers(status, content_type(real), end - start + 1, extra)
+        self._headers(status, ctype, end - start + 1, extra)
         if self.command == "HEAD":
             return
         with open(real, "rb") as f:
@@ -991,13 +1070,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    allowed_clients = ()                      # ip_network objects; empty = anyone who can reach the socket
+
+    def verify_request(self, request, client_address):
+        if not self.allowed_clients:
+            return True
+        try:
+            ip = ipaddress.ip_address(client_address[0].split("%")[0])
+        except ValueError:
+            return False
+        if getattr(ip, "ipv4_mapped", None):
+            ip = ip.ipv4_mapped
+        return any(ip in n for n in self.allowed_clients)
 
 
-def make_server(root, state_dir, config_path, port=DEFAULT_PORT, log=None, webhook_timeout=WEBHOOK_TIMEOUT, **app_kw):
+def machine_names():
+    """This machine's names and addresses for the Host check: host name, its .local name, every address it
+    resolves to, and the Tailscale MagicDNS name and addresses when the tailscale CLI is there."""
+    names = set()
+    host = socket.gethostname()
+    names |= {host, host + ".local"}
+    try:
+        names |= {ai[4][0] for ai in socket.getaddrinfo(host, None)}
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(["tailscale", "status", "--json"], capture_output=True, timeout=5,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        me = json.loads(out.stdout or b"{}").get("Self") or {}
+        if me.get("DNSName"):
+            dns = me["DNSName"].rstrip(".")
+            names |= {dns, dns.split(".")[0]}
+        names |= set(me.get("TailscaleIPs") or ())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return {n.split("%")[0] for n in names}
+
+
+def make_server(root, state_dir, config_path, port=DEFAULT_PORT, log=None, webhook_timeout=WEBHOOK_TIMEOUT,
+                network="local", extra_hosts=(), **app_kw):
+    """network "local" (default): 127.0.0.1 only. "lan": every interface, answering only LAN_NETWORKS clients and
+    this machine's own names (plus `extra_hosts`)."""
     app = BuildlogApp(root, state_dir, config_path, log=log, webhook_timeout=webhook_timeout, **app_kw)
     handler = type("BoundHandler", (Handler,), {"app": app})
-    server = Server((HOST, port), handler)
-    app.set_origin(server.server_address[1])
+    lan = network == "lan"
+    server = Server(("0.0.0.0" if lan else HOST, port), handler)
+    if lan:
+        server.allowed_clients = tuple(ipaddress.ip_network(n) for n in LAN_NETWORKS)
+    app.set_origin(server.server_address[1], (machine_names() if lan else set()) | set(extra_hosts))
     server.app = app
     return server
 
@@ -1006,7 +1126,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--settings", help="settings file (default: buildlog.json next to this script)")
     ap.add_argument("--root", help="directory to serve (default: from the settings)")
-    ap.add_argument("--port", type=int, help="port on 127.0.0.1 (default: from the settings)")
+    ap.add_argument("--port", type=int, help="port (default: from the settings; buildlog.json \"network\": \"lan\" listens beyond 127.0.0.1)")
     ap.add_argument("--state-dir", help="default: ~/.local/state/<name>")
     ap.add_argument("--config", help="webhook config (default: ~/.config/<name>/webhook.json)")
     ap.add_argument("--retry-seconds", type=float, default=RETRY_SECONDS)
@@ -1027,7 +1147,8 @@ def main(argv=None):
         log = sys.stderr = sys.stdout = open(log_path, "a", encoding="utf-8", buffering=1)
     server = make_server(root, state_dir, config, port, log=log, page=s["page"], tasks=s["tasks"], name=s["name"],
                          signature_header=s["signature_header"], review_items=s["review_items"],
-                         review_page=s["review_page"])
+                         review_page=s["review_page"], network=s.get("network", "local"),
+                         extra_hosts=s.get("extra_hosts", ()))
     app = server.app
     stop = threading.Event()
     threading.Thread(target=app.retry_loop, args=(stop, args.retry_seconds), daemon=True).start()
@@ -1038,7 +1159,10 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, quit_)
     signal.signal(signal.SIGINT, quit_)
     app.log("serving %s on http://%s:%d/%s (%s delivery, %d message(s) waiting)" % (
-        app.root, HOST, server.server_address[1], app.page_rel.as_posix(), app.delivery_mode(), len(app.pending)))
+        app.root, server.server_address[0], server.server_address[1], app.page_rel.as_posix(), app.delivery_mode(),
+        len(app.pending)))
+    if s.get("network") == "lan":
+        app.log("network: lan; answering %s" % ", ".join(sorted(h for h in app.allowed_hosts if not h.startswith("["))))
     try:
         server.serve_forever()
     finally:

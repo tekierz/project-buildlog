@@ -13,7 +13,9 @@ threads come back through the build log server's inbox as structured JSON (`revi
                  [--doc PATH[::title]]... [--choices "A|B|C"] [--choice ID::label[::detail]]...
                  [--candidate ID::label::MEDIA[::detail[::model[::round]]]]... [--recommend ID,ID]
                  [--on-answer TEXT] [--source-task TASK_ID] [--commit]
+                 [--supersedes OLD_ID] [--version LABEL] [--parent ID] [--workstream NAME] [--strict]
   review.py add --json FILE|-          the same fields as one JSON object (complex items)
+  review.py supersede OLD NEW          NEW replaces OLD: OLD folds into NEW's "Earlier versions", its notes carry over
   review.py update ID [the same flags; a list flag replaces that list] [--json FILE|-] [--commit]
   review.py close ID [--reply TEXT] [--commit]     the agent handled the answer; the card moves to Done
   review.py reopen ID [--commit]
@@ -22,12 +24,20 @@ threads come back through the build log server's inbox as structured JSON (`revi
   review.py resolve ID (--line N [--doc PATH] | --at SECONDS --clip PATH | --to MSG_ID) [--undo]
   review.py snooze ID (--until DATE | --for 3d | --later) [--reply TEXT]     unsnooze ID
   review.py list [--all] [--json]    review.py show ID
-  review.py inbox [--all] [--json] [--mark-read]      the user's answers no agent has handled yet
+  review.py inbox [--all] [--json] [--mark-read]      the user's answers no agent has handled yet; each shows the
+                                       version it was made on and is flagged when that version is no longer current
+  review.py check [--strict]           open items whose documents changed on disk, share a document with another
+                                       open item, or have newer commits on another branch
   review.py render [--all | ID...]   re-render the items' documents and the hub
   review.py preview PATH             render one .md / .screen.md to docs/review/docs/ and print its URL
   review.py sync                     rebuild the hub and the extra pages listed in buildlog.json
   review.py import-media PATH [--name NAME]   copy a file from outside the repo into docs/review/media/
   review.py commit -m MSG PATH...    commit only these paths (private index, see buildlog_tasks.py)
+
+Versions: an item that replaces another declares --supersedes OLD (or run `supersede OLD NEW`). One document,
+one open item: `add` warns when a document already belongs to an open item that NEW does not supersede (--strict,
+or "strict": true under "review" in buildlog.json, makes that an error). Decisions about a document use
+--parent DOC_ITEM and show inside that document's card.
 
 Settings come from the build log's buildlog.json (found next to this folder or in ../buildlog/): review_items,
 review_page and an optional "review" object (brand, pages, screenplay profile). Run it by absolute path in the
@@ -63,6 +73,10 @@ MEDIA_EXT = IMAGE_EXT + VIDEO_EXT + AUDIO_EXT
 DOC_EXT = (".md", ".txt", ".html", ".pdf", ".json")
 LIST_FIELDS = ("media", "compare", "docs", "choices", "candidates", "tags")
 AGENT_ONLY = ("on_answer",)
+# a version number in a file name: script_v12.md, bible-v3.md, notes.v2.md (the rest is the document's "stem")
+FILE_VERSION_RE = re.compile(r"(?i)[_.\- ]?v\d+(?=[_.\- ]|$)")
+LABEL_NUM_RE = re.compile(r"^(.*?)(\d+)$")
+WORKSTREAM_RE = re.compile(r"^[^\x00-\x1f]{1,60}$")
 SNAP_RE = re.compile(r"(<!-- ITEMS-SNAPSHOT:START -->).*?(<!-- ITEMS-SNAPSHOT:END -->)", re.S)
 DURATION_RE = re.compile(r"^(\d+)\s*([hdw])$")
 
@@ -363,13 +377,31 @@ def make_resolver(src_rel, item_id, queue, rendered):
     return resolve
 
 
-def page_context(item=None, doc_title=None):
-    """What a rendered document needs for its breadcrumb and comment threads."""
+def page_context(item=None, doc_title=None, doc_hash=""):
+    """What a rendered document needs for its breadcrumb, its comment threads and the version stamp on each note."""
     return {"brand": brand(), "hub": hub_href_from_docs(), "item_id": item["id"] if item else "",
-            "item_title": item["title"] if item else "", "doc_title": doc_title or ""}
+            "item_title": item["title"] if item else "", "doc_title": doc_title or "",
+            "version": (item.get("version") or "") if item else "", "rev": doc_hash}
 
 
-def render_doc(repo_rel, item=None, title=None, rendered=None, depth=2, source_note=""):
+def file_hash(repo_rel):
+    """The content hash of a repo file (12 hex): what a note records as the version of the document it was made on."""
+    try:
+        return hashlib.sha1((ROOT / repo_rel).read_bytes()).hexdigest()[:12]
+    except OSError:
+        return ""
+
+
+def item_rev(it):
+    """The revision of an item as the user sees it: its text, documents (by content), media and options."""
+    parts = [it.get("title"), it.get("summary"), it.get("body"), it.get("default"),
+             [(d.get("path"), d.get("hash")) for d in it.get("docs") or []],
+             [m.get("path") for m in it.get("media") or []], [(c.get("before"), c.get("after")) for c in it.get("compare") or []],
+             [c.get("id") for c in it.get("choices") or []], [(c.get("id"), c.get("media")) for c in it.get("candidates") or []]]
+    return hashlib.sha1(json.dumps(parts, sort_keys=True, ensure_ascii=True).encode()).hexdigest()[:12]
+
+
+def render_doc(repo_rel, item=None, title=None, rendered=None, depth=2, source_note="", doc_hash="", lines_out=None):
     """Render one repo document to the docs folder; linked .md files are rendered too (depth-limited)."""
     rendered = rendered if rendered is not None else set()
     queue = [repo_rel]
@@ -386,7 +418,7 @@ def render_doc(repo_rel, item=None, title=None, rendered=None, depth=2, source_n
         text = src.read_text(encoding="utf-8")
         sub_queue = []
         own = r == repo_rel
-        ctx = page_context(item if own else None, (title if own else None))
+        ctx = page_context(item if own else None, (title if own else None), doc_hash if own else "")
         if r.endswith(".screen.md"):
             page = screenplay.render_page(text, title=title if own else None, ctx=ctx, doc_rel=r,
                                           source_note=source_note if own else "")
@@ -395,6 +427,8 @@ def render_doc(repo_rel, item=None, title=None, rendered=None, depth=2, source_n
             page = md_render.render_page(text, title=title if own else None, resolve=resolver, ctx=ctx, doc_rel=r,
                                          source_note=source_note if own else "")
         bt.write_atomic(out, page)
+        if own and lines_out is not None:      # what each commentable line says, so notes can find it again
+            lines_out.extend(md_render.line_index(page))
         if level[r] < depth:
             for s in sub_queue:
                 level.setdefault(s, level[r] + 1)
@@ -404,14 +438,23 @@ def render_doc(repo_rel, item=None, title=None, rendered=None, depth=2, source_n
 
 def render_item_docs(item):
     """Render the item's documents (with its breadcrumb), then anything its body links to.
-    One `rendered` set per item, so a document linked from another is not rendered twice."""
+    One `rendered` set per item, so a document linked from another is not rendered twice.
+    A superseded item renders nothing: its pages are what it showed then, and a shared path belongs to the newer one."""
+    if item.get("superseded_by"):
+        return
     rendered = set()
     for d in item.get("docs") or []:
+        if d.get("frozen"):            # a snapshot of what an older version said; the file has moved on
+            rendered.add(d["path"])
+            continue
+        d["hash"] = file_hash(d["path"])
         if d["kind"] in ("md", "script"):
+            d["lines"] = []
             d["html"] = render_doc(d["path"], item=item, title=d.get("title") or None, rendered=rendered,
-                                   source_note="part of: %s" % item["title"])
+                                   source_note="part of: %s" % item["title"], doc_hash=d["hash"], lines_out=d["lines"])
         else:
             d["html"] = d["path"]
+    item["rev"] = item_rev(item)
     body = item.get("body") or ""
     if body:
         queue = []
@@ -453,9 +496,28 @@ def extra_pages():
     return [p for p in pages if isinstance(p, dict) and p.get("src") and p.get("out")] if isinstance(pages, list) else []
 
 
+def workstream_rules():
+    """buildlog.json review.workstreams: [{name, ids: ["glob*"], tags: ["tag"]}]: how the hub groups items that do not
+    name a --workstream (the first matching rule wins; otherwise the first tag)."""
+    rules = CFG.get("workstreams")
+    out = []
+    for r in rules if isinstance(rules, list) else []:
+        if isinstance(r, dict) and isinstance(r.get("name"), str) and r["name"].strip():
+            out.append({"name": r["name"].strip()[:60],
+                        "ids": [str(g) for g in r.get("ids") or [] if isinstance(g, str)],
+                        "tags": [str(t).lower() for t in r.get("tags") or [] if isinstance(t, str)]})
+    return out
+
+
 def snapshot_items(data):
-    """What the hub page embeds: everything except agent-only fields."""
-    return [{k: v for k, v in it.items() if k not in AGENT_ONLY} for it in data["items"]]
+    """What the hub page embeds: everything except agent-only fields (and the line index of replaced versions)."""
+    out = []
+    for it in data["items"]:
+        row = {k: v for k, v in it.items() if k not in AGENT_ONLY}
+        if it.get("superseded_by"):
+            row["docs"] = [{k: v for k, v in d.items() if k != "lines"} for d in it.get("docs") or []]
+        out.append(row)
+    return out
 
 
 def write_hub(data):
@@ -467,6 +529,7 @@ def write_hub(data):
     nav += [{"label": p.get("nav") or p.get("title") or p["out"], "href": p["out"]} for p in extra_pages()]
     snap = json.dumps({"items": snapshot_items(data), "generated": now_iso(), "live_url": LIVE_URL,
                        "buildlog_url": BUILDLOG_URL, "root": up(HUB_PATH.parent), "brand": brand(), "nav": nav,
+                       "workstreams": workstream_rules(),
                        "docs_dir": os.path.relpath(DOCS_OUT, HUB_PATH.parent).replace(os.sep, "/"),
                        "hub_dir": HUB_PATH.parent.relative_to(ROOT).as_posix()},
                       ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c")
@@ -520,7 +583,8 @@ def build_item(args, spec, existing=None):
     """Merge CLI flags and/or a JSON spec into a validated item dict."""
     it = dict(existing or {})
     spec = dict(spec or {})
-    for key in ("id", "kind", "title", "summary", "priority", "default", "how", "on_answer", "source_task"):
+    for key in ("id", "kind", "title", "summary", "priority", "default", "how", "on_answer", "source_task", "supersedes",
+                "parent", "version", "workstream"):
         val = getattr(args, key, None)
         if val is not None:
             spec[key] = val
@@ -537,7 +601,8 @@ def build_item(args, spec, existing=None):
     rec = getattr(args, "recommend", None) or spec.get("recommend") or []
     recommend = [s.strip() for s in rec.split(",") if s.strip()] if isinstance(rec, str) else list(rec)
 
-    for key in ("id", "kind", "title", "summary", "priority", "default", "how", "on_answer", "source_task", "body"):
+    for key in ("id", "kind", "title", "summary", "priority", "default", "how", "on_answer", "source_task", "body",
+                "supersedes", "parent", "version", "workstream"):
         if key in spec:
             it[key] = spec[key]
     if "media" in spec:
@@ -578,7 +643,205 @@ def build_item(args, spec, existing=None):
         die("an audition needs at least two --candidate entries")
     if it["kind"] == "action" and not it["how"].strip() and not it["body"].strip():
         print("note: an action usually carries --how with the commands to run", file=sys.stderr)
+    for key in ("supersedes", "parent"):
+        if it.get(key) in ("", None):
+            it.pop(key, None)
+        elif not ID_RE.match(str(it[key])):
+            die("--%s %r: not an item id" % (key, it[key]))
+    for key in ("version", "workstream"):
+        it[key] = str(it.get(key) or "").strip()
+        if it[key] and not WORKSTREAM_RE.match(it[key]):
+            die("--%s %r: one short line of text" % (key, it[key]))
+        if not it[key]:
+            it.pop(key)
     return it
+
+
+# ---- versions, parents and the one-document-one-open-item rule ---------------------------------------------
+
+def by_id(data):
+    return {x["id"]: x for x in data["items"]}
+
+
+def chain_back(it, items):
+    """The versions an item replaces, newest first (it.supersedes, then that one's, ...)."""
+    out, seen, cur = [], {it["id"]}, items.get(it.get("supersedes") or "")
+    while cur and cur["id"] not in seen:
+        out.append(cur)
+        seen.add(cur["id"])
+        cur = items.get(cur.get("supersedes") or "")
+    return out
+
+
+def head_of(it, items):
+    """The current version of an item (itself unless something superseded it)."""
+    seen = {it["id"]}
+    while it.get("superseded_by") in items and it["superseded_by"] not in seen:
+        it = items[it["superseded_by"]]
+        seen.add(it["id"])
+    return it
+
+
+def label_of(it, items=None):
+    """The version label people see: --version, else the position in its chain (v1, v2, ...), else ''."""
+    if it.get("version"):
+        return it["version"]
+    if items is not None and (it.get("supersedes") in items or it.get("superseded_by") in items):
+        return "v%d" % (len(chain_back(it, items)) + 1)
+    return ""
+
+
+def next_label(old, items):
+    """The label after the old version's: v12 -> v13, draft 2 -> draft 3; an unlabelled first version is v1 -> v2."""
+    label = label_of(old, items) or "v1"
+    m = LABEL_NUM_RE.match(label)
+    return "%s%d" % (m.group(1), int(m.group(2)) + 1) if m else label + " (new)"
+
+
+def doc_stem(path):
+    """A document path without a version number in its file name: scripts/ep1_v12.screen.md -> scripts/ep1.screen.md."""
+    p = Path(path)
+    name = p.name
+    base, dot, exts = name.partition(".")
+    return (p.parent / (FILE_VERSION_RE.sub("", base) + dot + exts)).as_posix()
+
+
+def is_open(it):
+    return it.get("status") != "closed" and not it.get("superseded_by")
+
+
+def doc_conflicts(it, data):
+    """Open items (other than its own versions, parent and children) that show the same document, or what looks like
+    another version of it (the same file name but for a version number). [(other, path, other_path, how)]"""
+    items = by_id(data)
+    related = {it["id"]} | {x["id"] for x in chain_back(it, items)}
+    if it.get("parent"):
+        related.add(it["parent"])
+        if it["parent"] in items:
+            related.add(head_of(items[it["parent"]], items)["id"])
+    related |= {x["id"] for x in data["items"] if x.get("parent") == it["id"]}
+    out = []
+    for d in it.get("docs") or []:
+        for other in data["items"]:
+            if other["id"] in related or not is_open(other):
+                continue
+            for od in other.get("docs") or []:
+                if od["path"] == d["path"]:
+                    out.append((other, d["path"], od["path"], "same file"))
+                elif doc_stem(od["path"]) == doc_stem(d["path"]) and doc_stem(d["path"]) != d["path"]:
+                    out.append((other, d["path"], od["path"], "another version of it"))
+    return out
+
+
+def git_out(args):
+    import subprocess
+    try:
+        r = subprocess.run(["git"] + args, cwd=str(ROOT), capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
+def newer_elsewhere(path):
+    """Commits on other branches that touch `path` and are not in this checkout: [(short, branch, when, subject)].
+    This is how a rewrite that sits on an unmerged branch gets noticed before the old copy is published."""
+    out = []
+    for line in git_out(["log", "--all", "--not", "HEAD", "-n", "5", "--format=%h%x09%cr%x09%s", "--", path]).splitlines():
+        short, _, rest = line.partition("\t")
+        when, _, subject = rest.partition("\t")
+        branches = [b.strip().lstrip("* ").strip() for b in git_out(["branch", "-a", "--contains", short,
+                                                                     "--format=%(refname:short)"]).splitlines() if b.strip()]
+        out.append((short, ", ".join(branches[:3]) + (" +%d more" % (len(branches) - 3) if len(branches) > 3 else ""),
+                    when, subject[:70]))
+    return out
+
+
+def strict_mode(args):
+    return bool(getattr(args, "strict", False) or CFG.get("strict") or os.environ.get("REVIEW_STRICT") == "1")
+
+
+def warn(msg):
+    print("review: warning: " + msg, file=sys.stderr)
+
+
+def check_publish(it, data, args, docs_changed=True):
+    """Before an item is published: the same document must not already be open under another item (that is how
+    people end up commenting on an outdated version), and newer copies on other branches are pointed out."""
+    if not docs_changed:
+        return
+    items, problems = by_id(data), []
+    for other, path, other_path, how in doc_conflicts(it, data):
+        lab = label_of(other, items)
+        on = "open item %r%s" % (other["id"], " (%s)" % lab if lab else "")
+        what = ("%s is already shown by %s" % (path, on) if how == "same file"
+                else "%s looks like another version of %s, which is shown by %s" % (path, other_path, on))
+        problems.append("%s. If %s replaces it, add --supersedes %s (or run: review.py supersede %s %s). "
+                        "If it is a decision about that document, add --parent %s."
+                        % (what, it["id"], other["id"], other["id"], it["id"], other["id"]))
+    for d in it.get("docs") or []:
+        for short, branches, when, subject in newer_elsewhere(d["path"])[:2]:
+            warn("%s has a commit this checkout does not have: %s (%s, %s) on %s. Publish the newest version."
+                 % (d["path"], short, subject, when, branches or "another ref"))
+    for p in problems:
+        if strict_mode(args):
+            die(p + " (strict mode)")
+        warn(p)
+
+
+def snapshot_shared_pages(it, data):
+    """`it` is about to render documents another item also shows. When the file changed since that item rendered it,
+    keep a copy of the old page for that item (docs/<slug>@<hash>.html) so its notes still point at what it said."""
+    paths = {d["path"] for d in it.get("docs") or []}
+    for other in data["items"]:
+        if other["id"] == it["id"]:
+            continue
+        for od in other.get("docs") or []:
+            if od["path"] not in paths or od.get("frozen") or not od.get("hash") or od.get("kind") not in ("md", "script"):
+                continue
+            if od["hash"] == file_hash(od["path"]):
+                continue
+            page = ROOT / (od.get("html") or doc_html_path(od["path"]))
+            if not page.is_file():
+                continue
+            target = page.with_name("%s@%s.html" % (page.stem, od["hash"][:8]))
+            if not target.exists():
+                shutil.copy2(str(page), str(target))
+            od["html"], od["frozen"] = rel(target), True
+
+
+def link_versions(it, data, stamp):
+    """Check --parent and --supersedes, then tie the old version to the new one (both directions)."""
+    items = by_id(data)
+    if it.get("parent"):
+        if it["parent"] == it["id"]:
+            die("--parent cannot be the item itself")
+        if it["parent"] not in items:
+            die("--parent %s: no such item" % it["parent"])
+        if items[it["parent"]].get("parent"):
+            die("--parent %s: that item is itself part of %s; attach to %s instead"
+                % (it["parent"], items[it["parent"]]["parent"], items[it["parent"]]["parent"]))
+    old_id = it.get("supersedes")
+    if not old_id:
+        return None
+    if old_id == it["id"]:
+        die("--supersedes cannot be the item itself")
+    old = items.get(old_id)
+    if not old:
+        die("--supersedes %s: no such item" % old_id)
+    if old.get("superseded_by") and old["superseded_by"] != it["id"] and old["superseded_by"] in items:
+        cur = head_of(old, items)
+        die("%s was already replaced by %s; the current version is %s (%s). Supersede that one instead."
+            % (old_id, old["superseded_by"], cur["id"], label_of(cur, items) or "no label"))
+    if it["id"] in {x["id"] for x in chain_back(old, items)}:
+        die("--supersedes %s would make a loop of versions" % old_id)
+    if not old.get("version"):
+        old["version"] = label_of(old, items) or "v1"
+    if not it.get("version"):
+        it["version"] = next_label(old, items)
+    old["superseded_by"], old["superseded_at"], old["updated"] = it["id"], stamp, stamp
+    if not it.get("workstream") and old.get("workstream"):
+        it["workstream"] = old["workstream"]
+    return old
 
 
 def cmd_add(args, data):
@@ -588,25 +851,88 @@ def cmd_add(args, data):
         die("id %r already exists (use update)" % it["id"])
     stamp = now_iso()
     it["added"], it["updated"], it["closed_at"] = stamp, stamp, None
+    old = link_versions(it, data, stamp)
+    check_publish(it, data, args)
+    snapshot_shared_pages(it, data)
     render_item_docs(it)
     data["items"].append(it)
     print(it["id"])
+    if old:
+        print("supersedes %s (%s -> %s)" % (old["id"], label_of(old), label_of(it)), file=sys.stderr)
     return "review: add %s" % it["id"]
 
 
 def cmd_update(args, data):
     it = find(data, args.id)
+    if it.get("superseded_by"):
+        warn("%s was replaced by %s; changes here only touch the old version" % (it["id"], it["superseded_by"]))
     spec = read_json_arg(args.json) if args.json else {}
     spec.pop("id", None)
     args.id = None
     new = build_item(args, spec, existing=it)
     new["id"] = it["id"]
     new["updated"] = now_iso()
+    if new.get("supersedes") != it.get("supersedes"):
+        link_versions(new, data, new["updated"])
+    check_publish(new, data, args, docs_changed=[d["path"] for d in new.get("docs") or []] != [d["path"] for d in it.get("docs") or []])
+    snapshot_shared_pages(new, data)
     render_item_docs(new)
     it.clear()
     it.update(new)
     print("updated: %s" % it["id"])
     return "review: update %s" % it["id"]
+
+
+def cmd_supersede(args, data):
+    """NEW replaces OLD (both already in the hub): OLD folds into NEW's earlier versions; its notes carry over."""
+    items = by_id(data)
+    new = find(data, args.new)
+    find(data, args.old)
+    if new.get("supersedes") == args.old and items[args.old].get("superseded_by") == new["id"]:
+        print("already: %s supersedes %s" % (new["id"], args.old))
+        return None
+    if new.get("supersedes") and new["supersedes"] != args.old:
+        die("%s already supersedes %s" % (new["id"], new["supersedes"]))
+    new["supersedes"] = args.old
+    if args.version:
+        new["version"] = args.version
+    stamp = now_iso()
+    old = link_versions(new, data, stamp)
+    new["updated"] = stamp
+    paths = {d["path"] for d in new.get("docs") or []}
+    for od in old.get("docs") or []:
+        if od["path"] in paths and not od.get("frozen"):
+            od["shared"] = True         # the page was rendered over by the new version before the link existed
+    render_item_docs(new)
+    print("superseded: %s (%s) -> %s (%s)" % (old["id"], label_of(old), new["id"], label_of(new)))
+    return "review: supersede %s with %s" % (old["id"], new["id"])
+
+
+def cmd_check(args, data):
+    """What could put an outdated version in front of the user: documents that changed on disk since they were
+    rendered, two open items showing the same document, and newer commits for a document on another branch."""
+    items, problems = by_id(data), []
+    for it in data["items"]:
+        if not is_open(it):
+            continue
+        for d in it.get("docs") or []:
+            if d.get("hash") and not d.get("frozen") and file_hash(d["path"]) != d["hash"]:
+                problems.append("%s: %s changed since it was rendered; the hub shows the old text (review.py render %s, "
+                                "or add the new version with --supersedes %s)" % (it["id"], d["path"], it["id"], it["id"]))
+            for short, branches, when, subject in newer_elsewhere(d["path"])[:2]:
+                problems.append("%s: %s has a newer commit on %s: %s %s (%s)" % (it["id"], d["path"], branches or "another ref",
+                                                                              short, subject, when))
+        for other, path, other_path, how in doc_conflicts(it, data):
+            if other["id"] < it["id"]:
+                continue                # each pair once
+            problems.append("%s and %s are both open and show %s%s: supersede one with the other, or make one the "
+                            "--parent of the other" % (it["id"], other["id"], path, "" if how == "same file" else " / " + other_path))
+        if it.get("parent") and it["parent"] not in items:
+            problems.append("%s: its --parent %s is gone" % (it["id"], it["parent"]))
+    for p in problems:
+        print("  " + p)
+    print("%d problem(s)" % len(problems) if problems else "ok: no outdated or duplicate documents in the hub")
+    return 1 if problems and args.strict else 0
 
 
 def cmd_close(args, data):
@@ -636,16 +962,25 @@ def thread_key(anchor):
     """The comment thread an anchor belongs to; the server (thread_key) and the pages use the same keys."""
     if anchor["type"] == "line":
         return "line:%s#%d" % (anchor.get("doc", ""), int(anchor["line"]))
+    if anchor["type"] == "msg":
+        return "msg:%s" % anchor.get("id", "")
     return "time:%s@%.1f" % (anchor.get("media", ""), float(anchor["time_s"]))
 
 
-def anchor_from_args(args, it, state_dir_path=None):
-    """--line N [--doc PATH], --at SECONDS --clip PATH or --to MESSAGE_ID -> an anchor dict, or None."""
+def anchor_from_args(args, it, state_dir_path=None, items=None):
+    """--line N [--doc PATH], --at SECONDS --clip PATH or --to MESSAGE_ID -> an anchor dict, or None.
+    --to also takes a note left on an earlier version of the item (anchor["item"] then names that version), and a
+    note without a line or time (its thread is the note itself: {"type": "msg", "id": ...})."""
     if getattr(args, "to", None):
         msg = next((m for m in bt.inbox_messages(state_dir_path) if m.get("id") == args.to), None)
-        if not msg or msg.get("item_id") != it["id"] or not msg.get("anchor"):
-            die("--to %s: no comment with an anchor on %s in the inbox" % (args.to, it["id"]))
-        return dict(msg["anchor"])
+        versions = {it["id"]} | {x["id"] for x in chain_back(it, items or {})}
+        if not msg or msg.get("item_id") not in versions:
+            die("--to %s: no note on %s (or an earlier version of it) in the inbox" % (args.to, it["id"]))
+        anchor = dict(msg["anchor"]) if msg.get("anchor") else {
+            "type": "msg", "id": msg["id"], "excerpt": (msg.get("comment") or msg.get("decision") or "")[:140]}
+        if msg["item_id"] != it["id"]:
+            anchor["item"] = msg["item_id"]
+        return anchor
     if getattr(args, "line", None) is not None:
         doc = args.doc
         if not doc:
@@ -687,7 +1022,7 @@ def cmd_reply(args, data):
     entry = {"at": now_iso(), "who": "agent", "text": text}
     if media:
         entry["media"] = media
-    anchor = anchor_from_args(args, it, state_dir(args))
+    anchor = anchor_from_args(args, it, state_dir(args), by_id(data))
     if anchor:
         entry["anchor"] = anchor
     it.setdefault("thread", []).append(entry)       # not "updated": a reply never reorders the card
@@ -697,11 +1032,12 @@ def cmd_reply(args, data):
 
 def cmd_resolve(args, data):
     it = find(data, args.id)
-    anchor = anchor_from_args(args, it, state_dir(args))
+    anchor = anchor_from_args(args, it, state_dir(args), by_id(data))
     if not anchor:
         die("resolve needs --line N [--doc PATH], --at SECONDS --clip PATH or --to MESSAGE_ID")
     key = thread_key(anchor)
-    it.setdefault("resolved", {})[key] = {"resolved": not args.undo, "at": now_iso(), "by": "agent"}
+    target = find(data, anchor["item"]) if anchor.get("item") else it      # a note on an earlier version: mark it there
+    target.setdefault("resolved", {})[key] = {"resolved": not args.undo, "at": now_iso(), "by": "agent"}
     if args.reply:
         it.setdefault("thread", []).append({"at": now_iso(), "who": "agent", "text": args.reply.strip(), "anchor": anchor})
     print("%s: %s %s" % ("reopened" if args.undo else "resolved", it["id"], key))
@@ -780,7 +1116,9 @@ def effective_snooze(it, ustate):
 
 
 def bucket(it, ustate, now=None):
-    """open | answered | snoozed | due | closed (due: a snooze that ran out; it is back in the main list)."""
+    """superseded | open | answered | snoozed | due | closed (due: a snooze that ran out; it is back in the main list)."""
+    if it.get("superseded_by"):
+        return "superseded"
     if it.get("status") == "closed":
         return "closed"
     s = effective_snooze(it, ustate)
@@ -808,8 +1146,9 @@ def cmd_list(args, data):
     rows = []
     for it in sorted(data["items"], key=sort_key):
         b = bucket(it, ustate)
-        if args.all or b != "closed":
+        if args.all or b not in ("closed", "superseded"):
             rows.append((it, b))
+    items = by_id(data)
     if args.json:
         out = []
         for it, b in rows:
@@ -818,7 +1157,7 @@ def cmd_list(args, data):
         print(json.dumps(out, indent=2, ensure_ascii=False))
         return
     groups = [("due", "Back from snooze (due again)"), ("open", "Needs the user"), ("answered", "Answered, waiting on an agent"),
-              ("snoozed", "Snoozed"), ("closed", "Done")]
+              ("snoozed", "Snoozed"), ("closed", "Done"), ("superseded", "Replaced by a newer version")]
     printed = False
     for b, head in groups:
         part = [it for it, bb in rows if bb == b]
@@ -831,6 +1170,12 @@ def cmd_list(args, data):
             if b in ("snoozed", "due") and s:
                 extra = "  [%s by %s]" % ("later" if s.get("later") else "until " + str(s.get("until")), s.get("by", "?"))
             tags = (" #" + " #".join(it["tags"])) if it.get("tags") else ""
+            lab = label_of(it, items)
+            if lab:
+                extra += "  [%s%s]" % (lab, ", replaced by " + it["superseded_by"] if it.get("superseded_by") else
+                                       ", replaces " + it["supersedes"] if it.get("supersedes") else "")
+            if it.get("parent"):
+                extra += "  (in %s)" % head_of(items[it["parent"]], items)["id"] if it["parent"] in items else "  (parent gone)"
             print("  %-8s %-6s %-36s %s%s%s" % (it["kind"], it.get("priority", "normal"), it["id"], it["title"], tags, extra))
         printed = True
     if not printed:
@@ -840,7 +1185,10 @@ def cmd_list(args, data):
 def cmd_show(args, data):
     it = find(data, args.id)
     ustate = user_state(args)
-    print(json.dumps(dict(it, bucket=bucket(it, ustate), snooze=effective_snooze(it, ustate),
+    items = by_id(data)
+    print(json.dumps(dict(it, bucket=bucket(it, ustate), snooze=effective_snooze(it, ustate), label=label_of(it, items),
+                          current=head_of(it, items)["id"], earlier=[x["id"] for x in chain_back(it, items)],
+                          children=[x["id"] for x in data["items"] if x.get("parent") == it["id"]],
                           answers=(ustate.get(it["id"]) or {}).get("answers") or []), indent=2, ensure_ascii=False))
 
 
@@ -859,10 +1207,45 @@ def describe(m):
     return d
 
 
+def made_on(m, items):
+    """(what the note was made on, why that is no longer current or '', the current item id). The server stamps each
+    note with the item's version label, its revision and, for a line comment, the document's content hash."""
+    it = items.get(m.get("item_id"))
+    stamp = dict(m.get("made_on") or {})
+    if not it:
+        return stamp, "", ""
+    if not stamp.get("version"):
+        stamp["version"] = label_of(it, items)      # labelled later, when a newer version replaced it
+    head = head_of(it, items)
+    if head is not it:
+        return stamp, "made on %s; %s replaced it (%s)" % (stamp.get("version") or it["id"], label_of(head, items) or "a newer version",
+                                                          head["id"]), head["id"]
+    anchor = m.get("anchor") or {}
+    if anchor.get("type") == "line" and stamp.get("doc_hash"):
+        cur = next((d.get("hash") for d in it.get("docs") or [] if d["path"] == anchor.get("doc")), "")
+        if cur and cur != stamp["doc_hash"]:
+            return stamp, "the document changed after this note (it quoted rev %s, now %s)" % (stamp["doc_hash"][:7], cur[:7]), it["id"]
+    elif stamp.get("rev") and it.get("rev") and stamp["rev"] != it["rev"] and not anchor:
+        return stamp, "the item changed after this note (rev %s, now %s)" % (stamp["rev"][:7], it["rev"][:7]), it["id"]
+    return stamp, "", it["id"]
+
+
+def line_now(anchor, holder):
+    """Where a line note is in the current text: the holder's document with the same path (or the same name but
+    for a version number), matched by the line's content. {item, doc, status: same|moved|changed|removed, line}."""
+    if not anchor or anchor.get("type") != "line" or not holder:
+        return None
+    docs = holder.get("docs") or []
+    d = next((x for x in docs if x["path"] == anchor.get("doc")), None) or next(
+        (x for x in docs if doc_stem(x["path"]) == doc_stem(anchor.get("doc") or "") != x["path"]), None)
+    loc = md_render.relocate(anchor, d.get("lines")) if d else None
+    return dict(loc, item=holder["id"], doc=d["path"]) if loc else None
+
+
 def cmd_inbox(args, data):
     sd = state_dir(args)
     sd.mkdir(parents=True, exist_ok=True, mode=0o700)
-    by_id = {it["id"]: it for it in data["items"]}
+    items, ustate = by_id(data), user_state(args)
     with bt.Locked(sd):
         read = bt.read_ids(sd)
         seen = set(read)
@@ -870,12 +1253,17 @@ def cmd_inbox(args, data):
         for m in msgs:
             if m["id"] in seen and m["status"] in ("queued", "local"):
                 m["status"] = "read"
-            it = by_id.get(m.get("item_id"))
+            it = items.get(m.get("item_id"))
             m["item_title"] = it["title"] if it else "(unknown item)"
             if m.get("anchor"):
                 m["thread"] = thread_key(m["anchor"])
             if it and it.get("on_answer"):
                 m["on_answer"] = it["on_answer"]
+            m["made_on"], m["outdated"], m["current_item"] = made_on(m, items)
+            key = thread_key(m["anchor"]) if m.get("anchor") else "msg:%s" % m["id"]
+            m["now"] = line_now(m.get("anchor"), items.get(m["current_item"])) if m["current_item"] else None
+            rec = _newer((it or {}).get("resolved", {}).get(key), ((ustate.get(m.get("item_id")) or {}).get("resolved") or {}).get(key))
+            m["addressed"] = bool(rec and rec.get("resolved"))       # by an agent (resolve) or the person (the hub)
         shown = msgs if args.all else [m for m in msgs if m["status"] in ("queued", "local")]
         if args.json:
             print(json.dumps(shown, indent=2, ensure_ascii=False))
@@ -890,11 +1278,23 @@ def cmd_inbox(args, data):
                 elif anchor.get("type") == "time":
                     head += " t=%ss %s" % (anchor.get("time_s"), anchor.get("media", ""))
                 print(head)
-                print("    item: %s" % m["item_title"])
+                mo = m["made_on"]
+                on = " ".join(x for x in (mo.get("version"), "rev " + mo["rev"][:7] if mo.get("rev") else "",
+                                          "doc " + mo["doc_hash"][:7] if mo.get("doc_hash") else "") if x)
+                print("    item: %s%s" % (m["item_title"], "   (on %s)" % on if on else ""))
+                if m["outdated"] and m["addressed"]:
+                    print("    (outdated: %s; already marked addressed)" % m["outdated"])
+                elif m["outdated"]:
+                    print("    OUTDATED: %s. It shows on %s as not yet addressed: handle it there, then "
+                          "review.py resolve %s --to %s." % (m["outdated"], m["current_item"], m["current_item"], m["id"]))
                 if (m.get("comment") or "").strip():
                     print("    " + m["comment"].strip().replace("\n", "\n    "))
                 if anchor.get("excerpt"):
                     print("    at: %s" % anchor["excerpt"])
+                now = m.get("now")
+                if now and now["status"] != "same":
+                    print("    now: %s" % ("that line was removed from %s" % now["doc"] if now["status"] == "removed" else
+                                          "line %d of %s (%s, was line %s)" % (now["line"], now["doc"], now["status"], anchor.get("line"))))
                 if m.get("on_answer") and m.get("decision") not in ("snooze", "unsnooze", "resolve", "unresolve"):
                     print("    agent: %s" % m["on_answer"])
             if not shown:
@@ -928,6 +1328,15 @@ def add_item_flags(p):
     p.add_argument("--recommend", help="comma-separated candidate ids the agents recommend, best first (shown as #1, #2, ...)")
     p.add_argument("--on-answer", dest="on_answer", help="agent-only: what to run when the answer arrives")
     p.add_argument("--source-task", dest="source_task", help="the buildlog task this replaces")
+    p.add_argument("--supersedes", metavar="OLD_ID", help="this is a new version of OLD_ID: OLD folds into this card's "
+                   "earlier versions, its comment boxes close and its notes carry over")
+    p.add_argument("--version", metavar="LABEL", help="the version label shown on the card (default with --supersedes: "
+                   "the old label plus one, v12 -> v13)")
+    p.add_argument("--parent", metavar="ID", help="the document item this belongs to (a decision about a script): it "
+                   "shows inside that card, and follows it to its newest version")
+    p.add_argument("--workstream", metavar="NAME", help="the group the hub files it under (default: the first --tag)")
+    p.add_argument("--strict", action="store_true", help="fail instead of warning when a document is already shown "
+                   "by another open item (also: \"strict\": true under \"review\" in buildlog.json, REVIEW_STRICT=1)")
     p.add_argument("--commit", action="store_true")
 
 
@@ -950,6 +1359,13 @@ def main(argv=None):
     p = sub.add_parser("update", help="change an item (list flags replace that list)")
     p.add_argument("id")
     add_item_flags(p)
+    p = sub.add_parser("supersede", help="NEW is a new version of OLD (both already in the hub)")
+    p.add_argument("old")
+    p.add_argument("new")
+    p.add_argument("--version", metavar="LABEL", help="NEW's label (default: OLD's plus one)")
+    p.add_argument("--commit", action="store_true")
+    p = sub.add_parser("check", help="outdated or duplicate documents among the open items")
+    p.add_argument("--strict", action="store_true", help="exit 1 when there is a problem")
     p = sub.add_parser("close")
     p.add_argument("id")
     p.add_argument("--reply", help="a closing note shown under the item")
@@ -1029,9 +1445,8 @@ def main(argv=None):
     REVIEW_DIR.mkdir(parents=True, exist_ok=True)
     with bt.Locked(REVIEW_DIR):
         data = load()
-        if args.cmd in ("list", "show", "inbox"):
-            {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox}[args.cmd](args, data)
-            return 0
+        if args.cmd in ("list", "show", "inbox", "check"):
+            return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "check": cmd_check}[args.cmd](args, data) or 0
         touched = [ITEMS_PATH, HUB_PATH, DOCS_OUT, MEDIA_OUT]
         if args.cmd == "render":
             ids = None if (args.all or not args.ids) else set(args.ids)
@@ -1043,7 +1458,7 @@ def main(argv=None):
             touched += [ROOT / p for p in write_extra_pages()]
             message = "review: sync"
         else:
-            message = {"add": cmd_add, "update": cmd_update, "close": cmd_close, "reopen": cmd_reopen,
+            message = {"add": cmd_add, "update": cmd_update, "supersede": cmd_supersede, "close": cmd_close, "reopen": cmd_reopen,
                        "reply": cmd_reply, "resolve": cmd_resolve, "snooze": cmd_snooze,
                        "unsnooze": cmd_unsnooze}[args.cmd](args, data)
             if message:

@@ -438,8 +438,8 @@ class CliTests(CliBase):
         self.assertTrue(out.strip().endswith("docs/review/docs/show--ep.screen.html"))
 
 
-class AnswerPathTests(CliBase):
-    """POST /api/review/answer on the build log server -> inbox.jsonl -> review inbox --json."""
+class ServerBase(CliBase):
+    """The build log server on a free port, for POST /api/review/answer -> inbox.jsonl -> review inbox --json."""
 
     def setUp(self):
         super().setUp()
@@ -478,6 +478,8 @@ class AnswerPathTests(CliBase):
         self.assertEqual(status, want, (body, j))
         return j
 
+
+class AnswerPathTests(ServerBase):
     def test_items_api_merges_answers_and_hides_agent_fields(self):
         status, j, _ = self.request("GET", "/api/review/items")
         self.assertEqual(status, 200)
@@ -585,6 +587,227 @@ class AnswerPathTests(CliBase):
         self.assertEqual(status, 416)
         status, raw, r = self.request("GET", "/docs/media/v1.mp3")
         self.assertEqual((status, r.getheader("Content-Type")), (200, "audio/mpeg"))
+
+
+class VersionTests(CliBase):
+    """Versions (supersedes), parents, one document per open item, and line notes that follow their line's content."""
+
+    def write(self, rel, text):
+        (self.root / rel).write_text(text, encoding="utf-8")
+
+    def item(self, item_id):
+        return next(i for i in self.items() if i["id"] == item_id)
+
+    def test_supersede_links_both_ways_labels_and_list(self):
+        self.write("docs/show/ep_v2.screen.md", SCRIPT.replace("Maybe they're shy.", "Maybe they're busy."))
+        self.ok("add", "--id", "ep-a", "--kind", "approve", "--title", "Episode", "--summary", "S", "--doc", "docs/show/ep.screen.md")
+        _, err = self.ok("add", "--id", "ep-b", "--kind", "approve", "--title", "Episode", "--summary", "S",
+                         "--doc", "docs/show/ep_v2.screen.md", "--supersedes", "ep-a")
+        self.assertIn("supersedes ep-a (v1 -> v2)", err)
+        a, b = self.item("ep-a"), self.item("ep-b")
+        self.assertEqual((a["superseded_by"], b["supersedes"], a["version"], b["version"]), ("ep-b", "ep-a", "v1", "v2"))
+        out, _ = self.ok("list")
+        self.assertNotIn("ep-a ", out)                    # an old version is not on the list
+        self.assertIn("[v2, replaces ep-a]", out)
+        out, _ = self.ok("list", "--all")
+        self.assertIn("Replaced by a newer version", out)
+        shown = json.loads(self.ok("show", "ep-a")[0])
+        self.assertEqual((shown["bucket"], shown["current"]), ("superseded", "ep-b"))
+        # a second "new version" of the old one is refused: it names the current version instead
+        code, _, err = self.run_cli("add", "--id", "ep-c", "--kind", "approve", "--title", "E", "--summary", "S", "--supersedes", "ep-a")
+        self.assertNotEqual(code, 0)
+        self.assertIn("the current version is ep-b (v2)", str(code) + err)
+        self.ok("add", "--id", "ep-c", "--kind", "approve", "--title", "E", "--summary", "S", "--version", "draft 7")
+        out, _ = self.ok("supersede", "ep-b", "ep-c")
+        self.assertIn("ep-b (v2) -> ep-c (draft 7)", out)
+        code, _, err = self.run_cli("supersede", "ep-c", "ep-a")        # a loop
+        self.assertNotEqual(code, 0)
+        hub = self.hub()
+        self.assertIn('"superseded_by":"ep-c"', hub)
+
+    def test_same_document_warns_and_strict_refuses(self):
+        self.ok("add", "--id", "bible", "--kind", "approve", "--title", "Bible", "--summary", "S", "--doc", "docs/show/notes.md")
+        _, err = self.ok("add", "--id", "bible2", "--kind", "approve", "--title", "Bible again", "--summary", "S", "--doc", "docs/show/notes.md")
+        self.assertIn("docs/show/notes.md is already shown by open item 'bible'", err)
+        self.assertIn("--supersedes bible", err)
+        self.assertIn("--parent bible", err)
+        code, _, err = self.run_cli("add", "--id", "bible3", "--kind", "approve", "--title", "B", "--summary", "S",
+                                    "--doc", "docs/show/notes.md", "--strict")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("bible3", [i["id"] for i in self.items()])
+        # a file name that differs only by its version number counts as the same document
+        self.write("docs/show/notes_v3.md", "# Notes v3\n\nNew.\n")
+        _, err = self.ok("add", "--id", "notes3", "--kind", "info", "--title", "N", "--summary", "S", "--doc", "docs/show/notes_v3.md")
+        self.assertIn("looks like another version of docs/show/notes.md", err)
+        # strict from buildlog.json; superseding is the way through
+        cfg = self.root / "tools" / "buildlog" / "buildlog.json"
+        s = json.loads(cfg.read_text(encoding="utf-8")); s["review"]["strict"] = True
+        cfg.write_text(json.dumps(s), encoding="utf-8")
+        self.review.configure(str(cfg))
+        code, _, _ = self.run_cli("add", "--id", "bible4", "--kind", "approve", "--title", "B", "--summary", "S", "--doc", "docs/show/notes.md")
+        self.assertNotEqual(code, 0)
+        self.ok("close", "bible2")
+        self.ok("close", "notes3")
+        self.ok("add", "--id", "bible4", "--kind", "approve", "--title", "B", "--summary", "S", "--doc", "docs/show/notes.md",
+                "--supersedes", "bible")
+
+    def test_parent_decisions_follow_the_document_to_its_new_version(self):
+        self.ok("add", "--id", "ep-a", "--kind", "approve", "--title", "Episode", "--summary", "S", "--doc", "docs/show/ep.screen.md")
+        code, _, _ = self.run_cli("add", "--id", "q", "--kind", "choice", "--title", "Keep it?", "--summary", "S", "--choices", "Yes|No", "--parent", "nope")
+        self.assertNotEqual(code, 0)
+        self.ok("add", "--id", "q", "--kind", "choice", "--title", "Keep it?", "--summary", "S", "--choices", "Yes|No", "--parent", "ep-a")
+        code, _, err = self.run_cli("add", "--id", "q2", "--kind", "choice", "--title", "K", "--summary", "S", "--choices", "Y|N", "--parent", "q")
+        self.assertNotEqual(code, 0)                      # one level: a decision's decision attaches to the document
+        self.ok("add", "--id", "ep-b", "--kind", "approve", "--title", "Episode", "--summary", "S", "--doc", "docs/show/ep.screen.md",
+                "--supersedes", "ep-a")
+        out, _ = self.ok("list")
+        self.assertIn("(in ep-b)", out)
+        self.assertEqual(json.loads(self.ok("show", "ep-b")[0])["children"], [])
+        self.assertEqual(json.loads(self.ok("show", "ep-a")[0])["children"], ["q"])
+
+    def test_rewritten_in_place_keeps_a_snapshot_for_the_old_version(self):
+        self.ok("add", "--id", "n1", "--kind", "approve", "--title", "Notes", "--summary", "S", "--doc", "docs/show/notes.md")
+        old_page = (self.root / self.item("n1")["docs"][0]["html"]).read_text(encoding="utf-8")
+        self.assertIn("Intro paragraph", old_page)
+        self.write("docs/show/notes.md", "# Title here\n\nA rewritten intro.\n")
+        self.ok("add", "--id", "n2", "--kind", "approve", "--title", "Notes", "--summary", "S", "--doc", "docs/show/notes.md", "--supersedes", "n1")
+        d1, d2 = self.item("n1")["docs"][0], self.item("n2")["docs"][0]
+        self.assertTrue(d1["frozen"])
+        self.assertRegex(d1["html"], r"docs/review/docs/show--notes@[0-9a-f]{8}\.html$")
+        self.assertIn("Intro paragraph", (self.root / d1["html"]).read_text(encoding="utf-8"))
+        self.assertIn("A rewritten intro", (self.root / d2["html"]).read_text(encoding="utf-8"))
+        self.assertNotEqual(d1["hash"], d2["hash"])
+        self.ok("render", "--all")                        # re-rendering never writes the old version over the new
+        self.assertIn("A rewritten intro", (self.root / d2["html"]).read_text(encoding="utf-8"))
+        self.assertIn("data-item='n2'", (self.root / d2["html"]).read_text(encoding="utf-8"))
+        self.assertIn("data-rev='%s'" % d2["hash"], (self.root / d2["html"]).read_text(encoding="utf-8"))
+
+    def test_check_finds_changed_shared_and_newer_elsewhere(self):
+        self.ok("add", "--id", "n1", "--kind", "approve", "--title", "Notes", "--summary", "S", "--doc", "docs/show/notes.md")
+        out, _ = self.ok("check")
+        self.assertIn("ok:", out)
+        self.write("docs/show/notes.md", "# changed\n")
+        code, out, _ = self.run_cli("check", "--strict")
+        self.assertEqual(code, 1)
+        self.assertIn("n1: docs/show/notes.md changed since it was rendered", out)
+        if shutil.which("git"):
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+            import subprocess
+            run = lambda *a: subprocess.run(git + list(a), cwd=str(self.root), capture_output=True, check=True)
+            run("init", "-q", "-b", "main"); run("add", "-A"); run("commit", "-qm", "one")
+            run("checkout", "-qb", "rewrite")
+            self.write("docs/show/ep.screen.md", SCRIPT + "\nMore.\n")
+            run("commit", "-qam", "a newer script"); run("checkout", "-q", "main")
+            _, err = self.ok("add", "--id", "ep", "--kind", "approve", "--title", "E", "--summary", "S", "--doc", "docs/show/ep.screen.md")
+            self.assertIn("has a commit this checkout does not have", err)
+            self.assertIn("rewrite", err)
+
+    def test_line_index_and_relocation(self):
+        md = self.review.md_render
+        self.ok("add", "--id", "ep", "--kind", "approve", "--title", "E", "--summary", "S", "--doc", "docs/show/ep.screen.md")
+        lines = self.item("ep")["docs"][0]["lines"]
+        by_n = {r[0]: r for r in lines}
+        n = next(i for i, l in enumerate(SCRIPT.splitlines(), 1) if "Maybe they're shy" in l)
+        self.assertEqual(by_n[n][1], md.line_fp("ROBOT: Maybe they're shy."))
+        self.assertEqual(by_n[n][2], "ROBOT")
+        anchor = {"type": "line", "line": n, "excerpt": "ROBOT: Maybe they're shy."}
+        self.assertEqual(md.relocate(anchor, lines), {"status": "same", "line": n})
+        # the file is rewritten: two lines are added above, the line is reworded, another is cut
+        new = SCRIPT.replace("Lights half up.", "Lights half up.\n\nA long beat.").replace("Maybe they're shy.", "Maybe they're just shy.") \
+            .replace("> Seven weeks. Zero trades.", "> Eight weeks.")
+        self.write("docs/show/ep.screen.md", new)
+        self.ok("update", "ep", "--summary", "v2")
+        lines2 = self.item("ep")["docs"][0]["lines"]
+        n2 = next(i for i, l in enumerate(new.splitlines(), 1) if "just shy" in l)
+        self.assertEqual(md.relocate(anchor, lines2), {"status": "changed", "line": n2})
+        sit = next(i for i, l in enumerate(SCRIPT.splitlines(), 1) if "Sit down" in l)
+        sit2 = next(i for i, l in enumerate(new.splitlines(), 1) if "Sit down" in l)
+        self.assertEqual(md.relocate({"type": "line", "line": sit, "excerpt": "HOST: [sighs] Sit down."}, lines2), {"status": "moved", "line": sit2})
+        seven = next(i for i, l in enumerate(SCRIPT.splitlines(), 1) if "Seven weeks" in l)
+        self.assertEqual(md.relocate({"type": "line", "line": seven, "excerpt": "HOST: Seven weeks. Zero trades."}, lines2)["status"], "removed")
+        self.assertIsNone(md.relocate({"type": "line", "line": 3}, lines2))     # nothing to match by
+
+    def test_hub_and_page_share_the_line_matching_code(self):
+        md = self.review.md_render
+        tpl = TEMPLATE.read_text(encoding="utf-8")
+        block = re.search(r"  /\* LINE-MATCH:START.*?LINE-MATCH:END \*/", tpl, re.S)
+        self.assertTrue(block, "the hub template lost its copy of LINE_JS")
+        self.assertEqual(block.group(0), re.search(r"  /\* LINE-MATCH:START.*?LINE-MATCH:END \*/", md.LINE_JS, re.S).group(0))
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed: the JS fingerprint is checked against Python only when it is")
+        import subprocess
+        samples = ["ROBOT: Maybe they're shy.", "Ünïcode & punctuation!!", "", "x" * 200, "HOST: [sighs] Sit down."]
+        js = md.LINE_JS + "\nconsole.log(JSON.stringify(%s.map(function (s) { return [lineFp(s), stem('docs/a/ep1_v12.screen.md'), " \
+                          "Math.round(similarity(s, 'robot maybe they are shy') * 1000)]; })));" % json.dumps(samples)
+        out = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+        want = [[md.line_fp(s), self.review.doc_stem("docs/a/ep1_v12.screen.md"), round(md.similarity(s, "robot maybe they are shy") * 1000)]
+                for s in samples]
+        self.assertEqual(out, want)
+
+    def test_page_carries_version_stamp_and_hub_has_version_views(self):
+        self.ok("add", "--id", "ep", "--kind", "approve", "--title", "E", "--summary", "S", "--doc", "docs/show/ep.screen.md")
+        d = self.item("ep")["docs"][0]
+        page = (self.root / d["html"]).read_text(encoding="utf-8")
+        self.assertIn("data-rev='%s'" % d["hash"], page)
+        self.assertIn("function relocate(", page)          # LINE_JS made it into the page
+        self.assertNotIn("@@LINE_JS@@", page)
+        self.assertRegex(self.item("ep")["rev"], r"^[0-9a-f]{12}$")
+        tpl = TEMPLATE.read_text(encoding="utf-8")
+        for want in ("Needs you now", "Earlier versions", "Superseded by ", "carried over", "answered by the orchestrator", "Decisions on this ", "asked on ",
+                     "review.visit:", "body.seen = {rev:", "just arrived", "decisions above still need"):
+            self.assertIn(want, tpl)
+
+
+class VersionAnswerTests(ServerBase):
+    """Notes record the version they were made on; the inbox flags the outdated ones and says where their line went."""
+
+    def test_notes_record_their_version_and_inbox_flags_outdated(self):
+        ep1 = next(i for i in self.request("GET", "/api/review/items")[1]["items"] if i["id"] == "ep1")
+        doc = ep1["docs"][0]
+        n = next(i for i, l in enumerate(SCRIPT.splitlines(), 1) if "Maybe they're shy" in l)
+        a = self.answer({"item_id": "ep1", "decision": "comment", "comment": "Funnier, please.", "seen": {"doc_hash": doc["hash"]},
+                         "anchor": {"type": "line", "line": n, "doc": doc["path"], "excerpt": "ROBOT: Maybe they're shy.", "who": "ROBOT"}})["answer"]
+        self.assertEqual(a["made_on"]["doc_hash"], doc["hash"])
+        self.assertEqual(a["anchor"]["fp"], self.review.md_render.line_fp("ROBOT: Maybe they're shy."))
+        self.assertEqual(a["anchor"]["who"], "ROBOT")
+        self.assertNotIn("outdated", a)
+        b = self.answer({"item_id": "ep1", "decision": "comment", "comment": "Whole thing is long.", "seen": {"rev": "000000000000"}})["answer"]
+        self.assertEqual(b["outdated"], "the page showed an older revision of the item")
+        # v2 of the script rewrites the file in place: the line moves down and changes a little
+        new = SCRIPT.replace("Lights half up.", "Lights half up.\n\nA beat.").replace("Maybe they're shy.", "Maybe they're just shy.")
+        (self.root / "docs/show/ep.screen.md").write_text(new, encoding="utf-8")
+        self.ok("add", "--id", "ep2", "--kind", "approve", "--title", "Episode 1", "--summary", "S", "--doc", "docs/show/ep.screen.md",
+                "--supersedes", "ep1")
+        c = self.answer({"item_id": "ep1", "decision": "comment", "comment": "late note on the old one"})["answer"]
+        self.assertIn("ep2 replaced", c["outdated"])
+        shown = {m["comment"]: m for m in json.loads(self.ok("inbox", "--json")[0])}
+        m = shown["Funnier, please."]
+        self.assertEqual((m["made_on"]["version"], m["current_item"]), ("v1", "ep2"))
+        self.assertIn("ep2", m["outdated"])
+        n2 = next(i for i, l in enumerate(new.splitlines(), 1) if "just shy" in l)
+        self.assertEqual((m["now"]["status"], m["now"]["line"], m["now"]["item"]), ("changed", n2, "ep2"))
+        self.assertFalse(m["addressed"])
+        text, _ = self.ok("inbox")
+        self.assertIn("OUTDATED: made on v1; v2 replaced it (ep2)", text)
+        self.assertIn("now: line %d of docs/show/ep.screen.md (changed, was line %d)" % (n2, n), text)
+        # the agent handles it on the new version: the note is marked addressed where it was made
+        self.ok("resolve", "ep2", "--to", m["id"])
+        self.assertIn("line:docs/show/ep.screen.md#%d" % n, self.items()[0]["resolved"])
+        self.assertTrue({x["comment"]: x for x in json.loads(self.ok("inbox", "--json")[0])}["Funnier, please."]["addressed"])
+        # a note without a line: its own thread, resolved from the page by message id
+        self.answer({"item_id": "ep1", "decision": "resolve", "anchor": {"type": "msg", "id": b["id"]}})
+        ep1_now = next(i for i in self.request("GET", "/api/review/items")[1]["items"] if i["id"] == "ep1")
+        self.assertTrue(ep1_now["resolved"]["msg:%s" % b["id"]]["resolved"])
+        self.assertTrue({x["comment"]: x for x in json.loads(self.ok("inbox", "--json")[0])}["Whole thing is long."]["addressed"])
+        self.answer({"item_id": "ep1", "decision": "resolve", "anchor": {"type": "msg", "id": "nope"}}, 400)
+
+    def test_notes_from_an_old_version_are_listed_with_the_new_one(self):
+        self.answer({"item_id": "ep1", "decision": "needs_changes", "comment": "Shorter."})
+        self.ok("add", "--id", "ep2", "--kind", "approve", "--title", "Episode 1", "--summary", "S", "--supersedes", "ep1")
+        items = {i["id"]: i for i in self.request("GET", "/api/review/items")[1]["items"]}
+        self.assertEqual((items["ep2"]["supersedes"], items["ep1"]["superseded_by"]), ("ep1", "ep2"))
+        self.assertEqual([a["comment"] for a in items["ep1"]["answers"]], ["Shorter."])     # kept on v1, the hub carries it to v2
 
 
 if __name__ == "__main__":

@@ -414,6 +414,39 @@ class StaticTests(Base):
             self.assertEqual(self.raw_get(target)[0], 404)
 
 
+class NetworkTests(Base):
+    """buildlog.json "network": "lan": every interface, but only LAN / Tailscale clients and this machine's names."""
+
+    def test_local_mode_is_loopback_only(self):
+        self.assertEqual(self.server.server_address[0], "127.0.0.1")
+        self.assertEqual(self.app.allowed_hosts, {"127.0.0.1:%d" % self.port, "localhost:%d" % self.port})
+
+    def test_lan_mode_filters_clients_and_hosts(self):
+        self.restart(network="lan", extra_hosts=("build-box.example",))
+        self.assertEqual(self.server.server_address[0], "0.0.0.0")
+        ok = self.server.verify_request
+        for ip in ("127.0.0.1", "100.77.115.67", "192.168.1.20", "10.0.0.7", "172.20.1.1", "::ffff:192.168.1.20",
+                   "fd7a:115c:a1e0::1"):
+            self.assertTrue(ok(None, (ip, 5555)), ip)
+        for ip in ("8.8.8.8", "100.128.0.1", "2001:4860::8888", "not-an-ip"):
+            self.assertFalse(ok(None, (ip, 5555)), ip)
+        s, _, _ = self.request("GET", "/" + PAGE, host="build-box.example:%d" % self.port)
+        self.assertEqual(s, 200)
+        s, _, _ = self.request("GET", "/" + PAGE, host="evil.example:%d" % self.port)
+        self.assertEqual(s, 403)
+
+    def test_pages_link_to_the_host_the_browser_used(self):
+        self.restart(network="lan", extra_hosts=("build-box.example",))
+        (self.root / "docs" / "links.html").write_text(
+            "<a href='http://127.0.0.1:%d/docs/x.html'>x</a>" % self.port, encoding="utf-8", newline="\n")
+        s, hdrs, raw = self.request("GET", "/docs/links.html", host="build-box.example:%d" % self.port)
+        self.assertEqual(s, 200)
+        self.assertEqual(raw, b"<a href='http://build-box.example:%d/docs/x.html'>x</a>" % self.port)
+        self.assertEqual(int(hdrs["content-length"]), len(raw))
+        s, _, raw = self.request("GET", "/docs/links.html")
+        self.assertIn(b"http://127.0.0.1:%d/" % self.port, raw)
+
+
 class SendTests(Base):
     def test_delivery_is_signed_and_complete(self):
         out = self.send(kind="task_update", task_id="alpha", done=True, note="approved, go ahead")

@@ -389,6 +389,7 @@ tr .marker{position:static;transform:none;margin-left:6px}
 .btn.small{min-height:28px;padding:3px 10px;font-size:13px}
 .btn:disabled{opacity:.45;cursor:default}
 .th .st{color:var(--muted);font-size:13px}
+.th .m .from,.ri .from{font:600 10.5px var(--mono);color:var(--warn);margin-left:6px}
 .th .edited{font:600 10.5px var(--mono);color:var(--warn);text-transform:none;letter-spacing:0}
 .inline-media{margin:8px 0}.inline-media video,.inline-media img{max-width:100%;border-radius:10px}.inline-media audio{width:100%}
 /* the comments rail */
@@ -412,6 +413,18 @@ tr .marker{position:static;transform:none;margin-left:6px}
 .ri .gone{color:var(--warn);font-size:11.5px;font-family:var(--font)}
 .media-chip{display:inline-block;font:600 12.5px var(--mono);background:var(--panel);border:1px solid var(--line-strong);border-radius:99px;padding:0 8px;text-decoration:none;margin:0 2px}
 .rail-empty{color:var(--muted);padding:18px 14px;font-size:14px;line-height:1.5}
+.vbanner{max-width:1180px;margin:14px auto 0;padding:11px 16px;border-radius:10px;font:15px/1.5 var(--font);color:var(--text);display:block}
+.vbanner[hidden]{display:none}
+.vbanner.old{background:#2a2108;border:1px solid rgba(245,185,66,.7);position:sticky;top:calc(var(--top) + 8px);z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.crumbs .ver{font:600 12px var(--mono);color:var(--accent);border:1px solid rgba(45,212,191,.45);border-radius:99px;padding:0 8px;margin-left:8px;white-space:nowrap}
+.crumbs .ver.old{color:var(--warn);border-color:rgba(245,185,66,.55)}
+body.closed-version .rail-help{display:none}
+body.closed-version .rail-list::before{content:attr(data-note);display:block;margin:4px 4px 8px;padding:7px 9px;border-radius:8px;background:rgba(245,185,66,.1);color:var(--warn);font-size:12.5px;line-height:1.45}
+body.closed-version .rail{opacity:.92}
+.vbanner.stale{background:rgba(143,179,255,.1);border:1px solid rgba(143,179,255,.45)}
+.vbanner b{margin-right:4px}.vbanner a{color:var(--info);font-weight:650}.vbanner .btn{margin-left:6px}
+.th .st.closed{margin-top:8px;color:var(--text2)}.th .st.closed a{color:var(--info)}
+body.closed-version .commentable{cursor:default}
 .rail-help{color:var(--muted);font-size:12.5px;padding:8px 14px 14px;border-top:1px solid var(--line);line-height:1.6}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line-strong);border-radius:10px;padding:8px 14px;font-size:14px;z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.4)}
 """
@@ -421,6 +434,8 @@ DOC_JS = r"""
   'use strict';
   var B = document.body, qs = new URLSearchParams(location.search);
   var ITEM = B.getAttribute('data-item') || qs.get('item') || '', DOC = B.getAttribute('data-doc') || '';
+  var REV = B.getAttribute('data-rev') || '', VER = B.getAttribute('data-version') || '';
+  var CLOSED = null;        // {id, label, doc}: a newer version replaced this one, so its comment boxes are closed
   var LIVE = location.protocol !== 'file:', FRAMED = window.parent !== window;
   if (FRAMED) B.classList.add('framed');
   if (LIVE && ITEM) B.classList.add('live');
@@ -434,7 +449,7 @@ DOC_JS = r"""
     return n;
   }
   function when(iso) { try { return new Date(iso).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}); } catch (e) { return iso || ''; } }
-  function toast(t) { var n = el('div', {class: 'toast', role: 'status', text: t}); B.appendChild(n); setTimeout(function () { n.remove(); }, 2200); }
+  function toast(t, ms) { var n = el('div', {class: 'toast', role: 'status', text: t}); B.appendChild(n); setTimeout(function () { n.remove(); }, ms || 2200); }
   function tell(msg) { if (FRAMED) try { parent.postMessage(msg, location.origin); } catch (e) {} }
 
   /* inline media links */
@@ -525,35 +540,65 @@ DOC_JS = r"""
       : e.classList.contains('sp-action') ? 'action' : 'paragraph';
   }
 
-  /* comment threads: the person's line comments (answers) and agent replies with a line anchor */
-  var threads = {}, order = [], filter = 'open', current = null;
+  /* comment threads: the person's line comments (answers) and agent replies with a line anchor. A note is placed by
+     its line's content, not only its number: when the document changed since, it goes to the line that now holds
+     its text (moved) or the closest match (changed); a note whose line is gone stays in the comments list as "line
+     removed". Notes on earlier versions of the item (it replaced one that showed this document) are placed the same
+     way and marked with their version. */
+/*@@LINE_JS@@*/
+  var threads = {}, order = [], filter = 'open', current = null, INDEX = null;
   function tkey(line) { return 'line:' + DOC + '#' + line; }
-  function thread(line, anchor) {
-    var k = tkey(line);
-    if (!threads[k]) { threads[k] = {key: k, line: Number(line), excerpt: (anchor && anchor.excerpt) || '', msgs: [], resolved: false, open: false}; }
+  function sameDoc(path) { return path === DOC || (!!path && stem(path) === stem(DOC) && stem(DOC) !== DOC); }
+  function index() {
+    if (!INDEX) INDEX = Object.keys(lineEls).map(function (n) { var t = cleanText(lineEls[n]); return [Number(n), lineFp(t), lineEls[n].getAttribute('data-who') || '', normText(t).slice(0, 48)]; });
+    return INDEX;
+  }
+  function elOf(t) { return t.gone ? null : lineEls[t.line]; }
+  function thread(line, anchor, gone) {
+    var k = gone ? 'gone:' + gone : tkey(line);
+    if (!threads[k]) threads[k] = {key: k, line: Number(line), excerpt: (anchor && anchor.excerpt) || '', msgs: [], keys: {}, resolved: false, open: false, gone: !!gone};
     return threads[k];
   }
-  function build(it) {
+  function place(src, an) {
+    var loc = relocate(an, index()), raw = 'line:' + (an.doc || '') + '#' + an.line;
+    var t = loc && loc.status === 'removed' ? thread(an.line, an, src.id + '|' + raw) : thread(loc ? loc.line : an.line, an);
+    var k = src.id + '|' + raw, r = src.resolved && src.resolved[raw];
+    if (!t.keys[k]) t.keys[k] = {item: src.id, anchor: an, resolved: !!(r && r.resolved)};
+    if (loc && loc.status !== 'same' && !t.was) { t.was = {status: loc.status, line: Number(an.line)}; if (!t.excerpt) t.excerpt = an.excerpt || ''; }
+    if (src.id !== ITEM) t.from = src.version || 'an earlier version';
+    return t;
+  }
+  function build(it, olds) {
     var keep = {}; Object.keys(threads).forEach(function (k) { keep[k] = threads[k].open; });
     threads = {};
-    (it.answers || []).forEach(function (a) {
-      if (!a.anchor || a.anchor.type !== 'line' || (a.anchor.doc || '') !== DOC) return;
-      if (a.decision === 'resolve' || a.decision === 'unresolve') { thread(a.anchor.line, a.anchor); return; }
-      thread(a.anchor.line, a.anchor).msgs.push({who: 'you', at: a.at, text: a.comment || '', decision: a.decision, status: a.status});
+    [it].concat(olds || []).forEach(function (src) {
+      var from = src.id !== ITEM ? (src.version || 'earlier') : '';
+      (src.answers || []).forEach(function (a) {
+        if (!a.anchor || a.anchor.type !== 'line' || !sameDoc(a.anchor.doc || '')) return;
+        var t = place(src, a.anchor);
+        if (a.decision === 'resolve' || a.decision === 'unresolve') return;
+        t.msgs.push({who: 'you', at: a.at, text: a.comment || '', decision: a.decision, status: a.status, from: from});
+      });
+      (src.thread || []).forEach(function (m) {
+        if (!m.anchor || m.anchor.type !== 'line' || !sameDoc(m.anchor.doc || '')) return;
+        place(src, m.anchor).msgs.push({who: m.who === 'you' ? 'you' : 'agent', at: m.at, text: m.text, from: from});
+      });
     });
-    (it.thread || []).forEach(function (m) {
-      if (!m.anchor || m.anchor.type !== 'line' || (m.anchor.doc || '') !== DOC) return;
-      thread(m.anchor.line, m.anchor).msgs.push({who: m.who === 'you' ? 'you' : 'agent', at: m.at, text: m.text});
-    });
-    var res = it.resolved || {};
     Object.keys(threads).forEach(function (k) {
-      var t = threads[k];
-      t.msgs.sort(function (a, b) { return String(a.at).localeCompare(String(b.at)); });
-      t.resolved = !!(res[k] && res[k].resolved);
+      var t = threads[k], ks = Object.keys(t.keys);
+      t.msgs.sort(function (a, b) { return (new Date(a.at).getTime() || 0) - (new Date(b.at).getTime() || 0); });
+      t.resolved = ks.length > 0 && ks.every(function (x) { return t.keys[x].resolved; });
       t.open = !!keep[k];
       if (!t.msgs.length) delete threads[k];
     });
     order = Object.keys(threads).map(function (k) { return threads[k]; }).sort(function (a, b) { return a.line - b.line; });
+  }
+  /* what happened to a thread's line since the comment: '' (nothing), moved, changed or removed */
+  function fate(t) {
+    if (t.gone) return 'line removed';
+    if (t.was && t.was.status === 'moved') return 'moved from line ' + t.was.line;
+    if ((t.was && t.was.status === 'changed') || edited(t)) return 'line changed since';
+    return '';
   }
   function linked(text) {
     var out = [], re = /https?:\/\/[^\s<>"')\]]+/g, last = 0, m;
@@ -578,6 +623,7 @@ DOC_JS = r"""
   function msgEl(m) {
     var dec = m.decision && m.decision !== 'comment' ? el('span', {class: 'dec', text: m.decision.replace('_', ' ')}) : null;
     return el('div', {class: 'm ' + m.who}, [el('span', {class: 'who', text: m.who === 'you' ? 'You' : 'Orchestrator'}), el('time', {text: when(m.at)}),
+      m.from ? el('span', {class: 'from', text: 'on ' + m.from}) : null,
       el('div', {class: 'txt'}, [dec].concat(linked(m.text)))]);
   }
   function placeBox(e, box) {
@@ -591,14 +637,14 @@ DOC_JS = r"""
   function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
   function edited(t) {
     /* the line's text no longer matches what the comment quoted (older excerpts may carry extra text around it) */
-    var e = lineEls[t.line]; if (!e || !t.excerpt) return false;
+    var e = elOf(t); if (!e || !t.excerpt) return false;
     var now = norm(cleanText(e)).slice(0, 40), was = norm(t.excerpt);
     return !!now && was.indexOf(now) < 0 && now.indexOf(was.slice(0, 40)) < 0;
   }
   function renderInline() {
     clearInline();
     order.forEach(function (t) {
-      var e = lineEls[t.line]; if (!e) return;
+      var e = elOf(t); if (!e) return;
       if (!t.msgs.length) { if (t.open || t.draft) placeBox(e, threadBox(t)); return; }      // a comment not sent yet
       e.classList.add('has-thread'); e.classList.toggle('all-resolved', t.resolved);
       var mk = el('button', {type: 'button', class: 'marker' + (t.resolved ? ' ok' : ''), title: (t.resolved ? 'Resolved: ' : 'Open: ') + t.msgs.length + ' comment(s)', text: (t.resolved ? '✓ ' : '💬 ') + t.msgs.length});
@@ -612,13 +658,14 @@ DOC_JS = r"""
   function threadBox(t) {
     var box = el('div', {class: 'th' + (t.resolved ? ' resolved' : ''), 'data-key': t.key});
     var head = el('div', {class: 'th-head'}, [el('span', {class: 'state', text: t.resolved ? '✓ Resolved' : t.msgs.length ? 'Open thread' : 'New comment'}),
-      el('span', {text: 'line ' + t.line}), edited(t) ? el('span', {class: 'edited', text: 'line changed since'}) : null, el('span', {class: 'grow'})]);
+      el('span', {text: 'line ' + t.line}), fate(t) ? el('span', {class: 'edited', text: fate(t)}) : null, el('span', {class: 'grow'})]);
     var close = el('button', {type: 'button', class: 'btn ghost small', text: 'Hide'});
     close.addEventListener('click', function () { t.open = false; delete t.draft; if (!t.msgs.length) { delete threads[t.key]; order = order.filter(function (x) { return x !== t; }); } renderInline(); renderRail(); });
     head.appendChild(close);
     box.appendChild(head);
     t.msgs.forEach(function (m) { box.appendChild(msgEl(m)); });
     if (!(LIVE && ITEM)) { box.appendChild(el('div', {class: 'st', text: 'Read-only copy: open the live page to reply.'})); return box; }
+    if (CLOSED) { box.appendChild(el('div', {class: 'st closed'}, ['Comments are closed on this old version. ', currentLink('Comment on ' + CLOSED.label + ' →')])); return box; }
     var ta = el('textarea', {rows: 2, placeholder: t.msgs.length ? 'Reply in this thread…' : 'What should change here?', 'aria-label': 'Comment on line ' + t.line});
     if (t.draft) ta.value = t.draft;
     ta.addEventListener('input', function () { t.draft = ta.value || ' '; });
@@ -627,7 +674,13 @@ DOC_JS = r"""
     var st = el('span', {class: 'st'});
     box.appendChild(ta);
     box.appendChild(el('div', {class: 'th-row'}, [send, res, el('span', {class: 'kbd', text: 'Ctrl+Enter'}), st]));
-    function anchor() { var e = lineEls[t.line]; return {type: 'line', line: t.line, doc: DOC, excerpt: e ? cleanText(e) : t.excerpt}; }
+    function anchor() {           /* the line's number and content: its text, fingerprint, speaker and block */
+      var e = elOf(t);
+      if (!e) { var k0 = Object.keys(t.keys)[0]; return k0 ? t.keys[k0].anchor : {type: 'line', line: t.line, doc: DOC, excerpt: t.excerpt}; }
+      var x = cleanText(e), blk = e.closest('[data-block]');
+      return {type: 'line', line: t.line, doc: DOC, excerpt: x, fp: lineFp(x), who: e.getAttribute('data-who') || (e.closest('[data-who]') || {getAttribute: function () { return ''; }}).getAttribute('data-who') || '',
+        block: blk ? blk.getAttribute('data-block') : ''};
+    }
     send.addEventListener('click', function () {
       var text = ta.value.trim(); if (!text) { st.textContent = 'Write something first.'; ta.focus(); return; }
       send.disabled = true; st.textContent = 'Sending…';
@@ -636,12 +689,16 @@ DOC_JS = r"""
         t.msgs.push({who: 'you', at: (r.answer && r.answer.at) || new Date().toISOString(), text: text, decision: 'comment'});
         if (order.indexOf(t) < 0) { order.push(t); order.sort(function (a, b) { return a.line - b.line; }); }
         if (t.resolved) t.resolved = false;
-        renderInline(); renderRail(); toast(r.delivered ? 'Comment sent.' : 'Comment saved; it will be retried.');
+        renderInline(); renderRail();
+        if (r.answer && r.answer.outdated) { toast('Saved, but a newer version replaced this one while you were reading. Your note is kept and listed on it.', 6000); load(); }
+        else toast(r.delivered ? 'Comment sent.' : 'Comment saved; it will be retried.');
       }, function (e) { send.disabled = false; st.textContent = 'Not sent: ' + e.message; });
     });
     if (res) res.addEventListener('click', function () {
       res.disabled = true;
-      post({decision: t.resolved ? 'unresolve' : 'resolve', anchor: anchor()}).then(function () {
+      /* a thread can hold notes from several anchors (moved lines, earlier versions): resolve each where it lives */
+      var ks = Object.keys(t.keys), d = t.resolved ? 'unresolve' : 'resolve';
+      (ks.length ? Promise.all(ks.map(function (k) { return post({decision: d, anchor: t.keys[k].anchor}, t.keys[k].item); })) : post({decision: d, anchor: anchor()})).then(function () {
         t.resolved = !t.resolved; t.open = !t.resolved; renderInline(); renderRail(); toast(t.resolved ? 'Thread resolved.' : 'Thread reopened.');
       }, function (e) { res.disabled = false; st.textContent = 'Failed: ' + e.message; });
     });
@@ -662,9 +719,9 @@ DOC_JS = r"""
       list.appendChild(el('div', {class: 'rail-empty', text: !(LIVE && ITEM) ? 'Comments show on the live page.' : c.all ? 'Nothing ' + filter + '.' : 'No comments yet. Click any line to start a thread.'}));
     }
     shown.forEach(function (t) {
-      var first = t.msgs[0] || {}, last = t.msgs[t.msgs.length - 1] || {}, e = lineEls[t.line];
+      var first = t.msgs[0] || {}, last = t.msgs[t.msgs.length - 1] || {}, e = elOf(t), fa = fate(t);
       var b = el('button', {type: 'button', class: 'ri' + (current === t ? ' current' : ''), title: 'Source line ' + t.line}, [
-        el('div', {class: 'where'}, [el('span', {class: 'ln', text: where(t)}), el('span', {class: 'grow'}), e ? (edited(t) ? el('span', {class: 'gone', text: 'edited since'}) : null) : el('span', {class: 'gone', text: 'line removed'}),
+        el('div', {class: 'where'}, [el('span', {class: 'ln', text: where(t)}), el('span', {class: 'grow'}), t.from ? el('span', {class: 'from', text: t.from}) : null, fa || !e ? el('span', {class: 'gone', text: fa || 'line removed'}) : null,
           el('span', {class: t.resolved ? 'ok' : 'open', text: t.resolved ? '✓ resolved' : 'open'})]),
         el('div', {class: 'ex', text: e ? about(e) : t.excerpt}),
         el('div', {class: 'first', text: first.text || ''}),
@@ -673,9 +730,9 @@ DOC_JS = r"""
       list.appendChild(b);
     });
   }
-  /* "Scene 4 · COACH STU" for scripts, the heading above for documents */
+  /* "Scene 4 · HOST" for scripts, the heading above for documents */
   function where(t) {
-    var e = lineEls[t.line]; if (!e) return 'Line ' + t.line;
+    var e = elOf(t); if (!e) return 'Line ' + t.line;
     if (e.classList.contains('sp-blockhead')) return 'Block ' + ((e.querySelector('.sp-blocknum') || {}).textContent || '') + ' · ' + ((e.querySelector('.sp-blocktitle') || {}).textContent || '');
     var all = Array.prototype.slice.call(document.querySelectorAll(B.classList.contains('script') ? '.sp-scene' : 'article h2, article h3'));
     var scene = null;
@@ -691,7 +748,7 @@ DOC_JS = r"""
   }
   function go(t) {
     current = t; t.open = true; renderInline(); renderRail();
-    var e = lineEls[t.line];
+    var e = elOf(t);
     if (e) { e.scrollIntoView({block: 'center', behavior: 'smooth'}); flash(e); tell({type: 'review-line', line: t.line}); }
     else toast('That line is gone from this version; the thread is kept in the list.');
   }
@@ -703,8 +760,9 @@ DOC_JS = r"""
     else { B.classList.toggle('rail-off'); railBtn.setAttribute('aria-pressed', B.classList.contains('rail-off') ? 'false' : 'true'); }
   });
 
-  function post(body) {
-    body.item_id = ITEM;
+  function post(body, item) {
+    body.item_id = item || ITEM;
+    body.seen = {doc_hash: REV, version: VER};          // the server records which version the note was made on
     return fetch('/api/review/answer', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Buildlog': '1'}, body: JSON.stringify(body)})
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); },
             function () { throw new Error('cannot reach the build log server'); });
@@ -720,6 +778,7 @@ DOC_JS = r"""
       var t = threads[tkey(n)];
       tell({type: 'review-line', line: Number(n)});
       if (!(LIVE && ITEM)) { if (!t) toast('Open the live page to comment.'); }
+      if (CLOSED && !t) { toast('This version was replaced by ' + CLOSED.label + '. Comment there.'); return; }
       if (!t) { t = thread(n, {excerpt: cleanText(e)}); t.draft = ' '; order.push(t); order.sort(function (a, b) { return a.line - b.line; }); }
       t.open = true; t.focus = true; current = t;
       renderInline(); renderRail();
@@ -752,11 +811,50 @@ DOC_JS = r"""
   var stamp = null;
   function load() {
     if (!(LIVE && ITEM)) { renderRail(); return Promise.resolve(); }
-    return fetch('/api/review/items?id=' + encodeURIComponent(ITEM), {cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
-      var it = j && j.items && j.items[0]; if (!it) return;
+    return fetch('/api/review/items', {cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      var all = {}; ((j && j.items) || []).forEach(function (x) { all[x.id] = x; });
+      var it = all[ITEM]; if (!it) return;
       var crumb = document.getElementById('crumb-item'); if (crumb && !crumb.textContent.trim()) crumb.textContent = it.title;
-      build(it); renderInline(); renderRail();
+      var olds = [], seen = {}, o = all[it.supersedes];            /* the versions it replaced, for their notes */
+      seen[it.id] = 1;
+      while (o && !seen[o.id]) { seen[o.id] = 1; olds.push(o); o = all[o.supersedes]; }
+      build(it, olds); renderInline(); renderRail();
+      return versionBanner(it);
     }, function () { renderRail(); });
+  }
+  /* versions: a newer item replaced this one (comments close, with a link to it), or this page is an older copy
+     of the document than the hub's (the file changed and was rendered again) */
+  function hubHref(id, path) {
+    var h = document.querySelector('[data-nav=hub]');
+    return (h ? h.getAttribute('href').split('#')[0] : '../index.html') + '#item=' + encodeURIComponent(id) + (path ? '&doc=' + encodeURIComponent(path) : '');
+  }
+  function currentLink(text) { return el('a', {href: hubHref(CLOSED.id, CLOSED.doc), target: '_top', text: text}); }
+  function versionBanner(it) {
+    var bn = document.getElementById('vbanner'); if (!bn) return;
+    var mine = (it.docs || []).filter(function (d) { return d.path === DOC; })[0];
+    if (it.superseded_by) {
+      return fetch('/api/review/items?id=' + encodeURIComponent(it.superseded_by), {cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        var nx = j && j.items && j.items[0]; if (!nx) return;
+        var same = (nx.docs || []).filter(function (d) { return d.path === DOC; })[0] || (nx.docs || [])[0];
+        CLOSED = {id: nx.id, label: nx.version || 'the new version', doc: same ? same.path : ''};
+        bn.className = 'vbanner old'; bn.hidden = false; bn.textContent = '';
+        bn.appendChild(el('b', {text: 'Old version' + (VER || it.version ? ' (' + (VER || it.version) + ')' : '') + '.'}));
+        bn.appendChild(document.createTextNode(' ' + CLOSED.label + ' replaced it' + (it.superseded_at ? ' on ' + when(it.superseded_at) : '') +
+          '. Notes made here are kept and listed on ' + CLOSED.label + '; new comments go there. '));
+        bn.appendChild(currentLink('Open ' + CLOSED.label + ' →'));
+        B.classList.add('closed-version');
+        var rl = document.getElementById('rail-list'); if (rl) rl.setAttribute('data-note', 'Read-only. These threads continue on ' + CLOSED.label + ', at the matching lines.');
+        var vt = document.getElementById('doc-ver'); if (vt) { vt.textContent = (VER || it.version || 'old') + ' · replaced'; vt.classList.add('old'); }
+        renderInline(); renderRail();
+      }, function () {});
+    }
+    if (mine && mine.hash && REV && mine.hash !== REV && !mine.frozen) {
+      bn.className = 'vbanner stale'; bn.hidden = false; bn.textContent = '';
+      bn.appendChild(el('b', {text: 'This copy is out of date.'}));
+      bn.appendChild(document.createTextNode(' The document changed after this page loaded. '));
+      var rl = el('button', {type: 'button', class: 'btn small', text: 'Reload'}); rl.addEventListener('click', function () { location.reload(); });
+      bn.appendChild(rl);
+    }
   }
   function poll() {
     fetch('/api/version', {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (v) {
@@ -781,8 +879,9 @@ def page_shell(title, body_html, ctx=None, doc_rel="", toc_html="", tools_html="
     item_href = hub + ("#item=" + E(item_id, True) if item_id else "")
     crumbs = ("<nav class='crumbs' aria-label='Breadcrumb'><a href='%s' data-nav='hub' target='_top'><span class='brand'>%s</span>&nbsp;review</a>"
               "<span class='sep'>&rsaquo;</span><a id='crumb-item' class='mid' href='%s' data-nav='item' target='_top' title='Back to the item'>%s</a>"
-              "<span class='sep'>&rsaquo;</span><span class='here' title='%s'>%s</span></nav>"
-              % (E(hub, True), E(ctx.get("brand") or "Project"), item_href, E(ctx.get("item_title") or ""), E(title, True), E(title)))
+              "<span class='sep'>&rsaquo;</span><span class='here' title='%s'>%s</span>%s</nav>"
+              % (E(hub, True), E(ctx.get("brand") or "Project"), item_href, E(ctx.get("item_title") or ""), E(title, True), E(title),
+                 "<span class='ver' id='doc-ver' title='The version of this document'>%s</span>" % E(ctx["version"]) if ctx.get("version") else ""))
     tools = ""
     if comments:
         tools += ("<button type='button' class='tbtn' id='rail-toggle' aria-pressed='true' title='Show or hide the comments'>"
@@ -800,12 +899,12 @@ def page_shell(title, body_html, ctx=None, doc_rel="", toc_html="", tools_html="
     layout = "layout" + ("" if toc_html else " no-toc")
     return ("<!doctype html>\n<html lang='en'>\n<head>\n<meta charset='utf-8'>\n"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>\n<title>%s</title>\n"
-            "<style>%s%s%s</style>\n</head>\n<body class='%s%s' data-item='%s' data-doc='%s'>\n"
+            "<style>%s%s%s</style>\n</head>\n<body class='%s%s' data-item='%s' data-doc='%s' data-rev='%s' data-version='%s'>\n"
             "<header class='top'><div class='row1'>%s<div class='tools'>%s</div></div>%s</header>\n"
-            "<div class='%s'>%s<article class='doc'>%s%s</article>%s</div>\n<script>%s</script>\n</body>\n</html>\n"
+            "<div id='vbanner' class='vbanner' hidden></div><div class='%s'>%s<article class='doc'>%s%s</article>%s</div>\n<script>%s</script>\n</body>\n</html>\n"
             % (E(title), PAGE_CSS, COMMENT_CSS, extra_css, E(body_class, True), "" if comments else " rail-off",
-               E(item_id, True), E(doc_rel, True), crumbs, tools,
-               "<div class='subbar'>%s</div>" % tools_html if tools_html else "", layout, toc_html, body_html, foot, rail, DOC_JS))
+               E(item_id, True), E(doc_rel, True), E(ctx.get("rev") or "", True), E(ctx.get("version") or "", True), crumbs, tools,
+               "<div class='subbar'>%s</div>" % tools_html if tools_html else "", layout, toc_html, body_html, foot, rail, DOC_JS.replace("/*@@LINE_JS@@*/", LINE_JS)))
 
 
 def render_page(text, title=None, resolve=None, ctx=None, doc_rel="", source_note="", comments=True):
@@ -828,6 +927,158 @@ def _with_lines(body):
         n[0] += 1
         return "<%s data-line='%d'" % (m.group(1), n[0])
     return re.sub(r"<(p|li|h2|h3|h4|tr)(?=[ >])", tag, body)
+
+
+# ---- anchoring comments by content -------------------------------------------------------------------------
+# A line comment records the line number AND the line's content (excerpt, fingerprint, speaker). When the document
+# is rewritten, a note finds its line again: the same text elsewhere (moved), a close match (changed), or nothing
+# (removed). review.py stores the index of every rendered document (docs[].lines: [line, fingerprint, speaker,
+# start of the text]); the pages and the hub run the same matching in LINE_JS below.
+SKIP_CLASSES = ("th", "marker", "sp-chips", "chip", "anchor")
+VOID_TAGS = ("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr")
+
+
+def norm_text(s):
+    """What a line's identity is made of: lowercase letters and digits only (punctuation, spacing and markup go)."""
+    return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
+
+
+def line_fp(s):
+    """An 8-hex fingerprint of a line's text (FNV-1a over the first 80 normalized characters); '' for an empty line."""
+    t = norm_text(s)[:80]
+    if not t:
+        return ""
+    h = 0x811c9dc5
+    for ch in t:
+        h = ((h ^ ord(ch)) * 0x01000193) & 0xffffffff
+    return "%08x" % h
+
+
+def similarity(a, b):
+    """Dice coefficient of the character pairs of two normalized texts (0..1)."""
+    a, b = norm_text(a)[:160], norm_text(b)[:160]
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    pa, pb = {}, {}
+    for s_, d in ((a, pa), (b, pb)):
+        for i in range(len(s_) - 1):
+            d[s_[i:i + 2]] = d.get(s_[i:i + 2], 0) + 1
+    common = sum(min(n, pb.get(k, 0)) for k, n in pa.items())
+    total = max(1, len(a) - 1) + max(1, len(b) - 1)
+    return 2.0 * common / total
+
+
+def relocate(anchor, lines):
+    """Where a line comment belongs in the current version of its document.
+    lines: [[line, fp, who, text48], ...]. Returns {"status": same|moved|changed|removed, "line": N} or None (unknown:
+    no excerpt or no index)."""
+    if not lines or not isinstance(anchor, dict):
+        return None
+    fp = anchor.get("fp") or line_fp(anchor.get("excerpt"))
+    if not fp:
+        return None
+    try:
+        n = int(anchor.get("line"))
+    except (TypeError, ValueError):
+        n = 0
+    for row in lines:
+        if row[0] == n and row[1] == fp:
+            return {"status": "same", "line": n}
+    exact = [row for row in lines if row[1] == fp]
+    if exact:
+        return {"status": "moved", "line": min(exact, key=lambda r: abs(r[0] - n))[0]}
+    base = norm_text(anchor.get("excerpt"))[:48]
+    best, score = None, 0.0
+    for row in lines:
+        sc = similarity(base, row[3]) - abs(row[0] - n) * 0.0005
+        if sc > score:
+            best, score = row, sc
+    if best and score >= 0.55:
+        return {"status": "changed", "line": best[0]}
+    return {"status": "removed", "line": n}
+
+
+def line_index(page):
+    """[[line, fp, who, text48]] for every commentable element of a rendered page, the innermost per line (as the page
+    picks it): the text a comment quotes (data-excerpt, else the visible text without chips and buttons)."""
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.stack, self.found = [], {}
+
+        def handle_starttag(self, tag, attrs):
+            if tag in VOID_TAGS:
+                return
+            a = dict(attrs)
+            cls = (a.get("class") or "").split()
+            skip = tag in ("audio", "video", "button", "script", "style") or any(c in SKIP_CLASSES for c in cls)
+            self.stack.append({"line": a.get("data-line"), "excerpt": a.get("data-excerpt"), "who": a.get("data-who") or "",
+                               "skip": skip, "text": []})
+
+        def handle_endtag(self, tag):
+            if tag in VOID_TAGS or not self.stack:
+                return
+            el = self.stack.pop()
+            text = el["excerpt"] if el["excerpt"] is not None else re.sub(r"\s+", " ", "".join(el["text"])).strip()[:140]
+            if self.stack and not el["skip"]:
+                self.stack[-1]["text"].append("".join(el["text"]))
+            if el["line"] and el["line"].isdigit():
+                n = int(el["line"])
+                if n not in self.found or self.found[n][1] < len(self.stack):     # deeper wins
+                    self.found[n] = ((n, line_fp(text), el["who"], norm_text(text)[:48]), len(self.stack))
+
+        def handle_data(self, data):
+            if self.stack and not any(e["skip"] for e in self.stack):
+                self.stack[-1]["text"].append(data)
+
+    parser = P()
+    body = page.split("<body", 1)[-1].split("<script>", 1)[0]
+    parser.feed("<body" + body)
+    return [list(v[0]) for _, v in sorted(parser.found.items())]
+
+
+LINE_JS = r"""
+  /* LINE-MATCH:START (the same code runs in the hub and the document pages; md_render.py LINE_JS is the source) */
+  function normText(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+  function lineFp(s) {
+    var t = normText(s).slice(0, 80); if (!t) return '';
+    var h = 0x811c9dc5;
+    for (var i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return ('0000000' + h.toString(16)).slice(-8);
+  }
+  function similarity(a, b) {
+    a = normText(a).slice(0, 160); b = normText(b).slice(0, 160);
+    if (!a || !b) return 0; if (a === b) return 1;
+    var pa = {}, pb = {}, common = 0, k;
+    for (var i = 0; i < a.length - 1; i++) { k = a.slice(i, i + 2); pa[k] = (pa[k] || 0) + 1; }
+    for (var j = 0; j < b.length - 1; j++) { k = b.slice(j, j + 2); pb[k] = (pb[k] || 0) + 1; }
+    Object.keys(pa).forEach(function (x) { common += Math.min(pa[x], pb[x] || 0); });
+    return 2 * common / (Math.max(1, a.length - 1) + Math.max(1, b.length - 1));
+  }
+  /* a document path without the version number in its file name (review.py doc_stem): ep1_v12.screen.md -> ep1.screen.md */
+  function stem(path) {
+    var parts = String(path || '').split('/'), name = parts.pop(), i = name.indexOf('.');
+    return parts.concat([(i < 0 ? name : name.slice(0, i)).replace(/[_.\- ]?v\d+(?=[_.\- ]|$)/ig, '') + (i < 0 ? '' : name.slice(i))]).join('/');
+  }
+  /* where a line comment belongs now: {status: same|moved|changed|removed, line} or null (unknown) */
+  function relocate(an, lines) {
+    if (!lines || !lines.length || !an) return null;
+    var fp = an.fp || lineFp(an.excerpt); if (!fp) return null;
+    var n = Number(an.line) || 0, i, row;
+    for (i = 0; i < lines.length; i++) if (lines[i][0] === n && lines[i][1] === fp) return {status: 'same', line: n};
+    var exact = lines.filter(function (r) { return r[1] === fp; });
+    if (exact.length) { exact.sort(function (x, y) { return Math.abs(x[0] - n) - Math.abs(y[0] - n); }); return {status: 'moved', line: exact[0][0]}; }
+    var base = normText(an.excerpt).slice(0, 48), best = null, score = 0;
+    for (i = 0; i < lines.length; i++) { row = lines[i]; var sc = similarity(base, row[3]) - Math.abs(row[0] - n) * 0.0005; if (sc > score) { best = row; score = sc; } }
+    if (best && score >= 0.55) return {status: 'changed', line: best[0]};
+    return {status: 'removed', line: n};
+  }
+  /* LINE-MATCH:END */
+"""
 
 
 if __name__ == "__main__":

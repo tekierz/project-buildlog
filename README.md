@@ -73,13 +73,15 @@ python3 -I /path/to/repo/tools/buildlog/review/review.py add --id logo --kind ap
 python3 -I /path/to/repo/tools/buildlog/review/review.py inbox
 ```
 
-Scripts in [ScreenMark](https://github.com/tekierz/screen-mark) (`.screen.md`) render as screenplay review pages with line comment threads. See the [review hub guide](skills/project-buildlog/references/review-hub.md).
+Scripts in [ScreenMark](https://github.com/tekierz/screen-mark) (`.screen.md`) render as screenplay review pages with line comment threads.
+
+Versions are first-class. `add --supersedes OLD` makes a new version the only card: the old one folds into "Earlier versions" with its comment boxes closed, and its notes carry over ("3 notes from v12, carried over · 2 open"). Line comments are anchored by the line's content, so they follow their line when a document is rewritten. Every note records the version it was made on, and `inbox` flags notes made on an outdated one. Decisions about a document (`--parent ID`) show inside its card. `add` warns before a second open card shows the same document, and `review.py check` finds documents that changed or have newer commits on another branch. See the [review hub guide](skills/project-buildlog/references/review-hub.md).
 
 Rendering replaces CURRENT, TIMELINE and UPDATED; migrate handwritten content there before using it on an older page. Other sections remain intact. Run `setup.py upgrade-page --project DIR` to add display controls to an older page with a backup.
 
 ## Security and verification
 
-The server binds to 127.0.0.1, guards POST requests against cross-site use, and signs webhook messages. The signing key and webhook URL stay outside git in private files. A signed note is treated as the user's words, never as shell code. Use T3 private secret entry and a one-use `secretRef` for scheduling.
+The server binds to 127.0.0.1, guards POST requests against cross-site use, and signs webhook messages. An opt-in `"network": "lan"` setting serves the pages to your Tailscale or home-LAN devices: private ranges only, this machine's host names only, and you still need a firewall rule (see [reference.md](skills/project-buildlog/references/reference.md#opening-the-pages-from-another-device-opt-in)). The signing key and webhook URL stay outside git in private files. A signed note is treated as the user's words, never as shell code. Use T3 private secret entry and a one-use `secretRef` for scheduling.
 
 ```bash
 python3 -I skills/project-buildlog/scripts/tests/test_setup.py
