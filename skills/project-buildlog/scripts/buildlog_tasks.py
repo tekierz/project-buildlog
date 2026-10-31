@@ -417,6 +417,8 @@ def cmd_inbox(args, settings):
                 head = "%s %-6s %-11s" % (m.get("sent_at", "?"), m["status"], m.get("kind", "?"))
                 if m.get("kind") == "task_update":
                     head += " %s done=%s" % (m.get("task_id"), m.get("done"))
+                elif m.get("kind") == "review":           # details and threads: review.py inbox
+                    head += " %s %s" % (m.get("item_id"), m.get("decision"))
                 head += " id=%s" % m["id"]
                 print(head)
                 note = str(m.get("note", "")).strip()

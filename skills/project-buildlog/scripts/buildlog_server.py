@@ -11,6 +11,17 @@ Serves the project root read-only on 127.0.0.1 and adds a small JSON API:
   GET  /api/messages     the general conversation: messages sent plus the
                          orchestrator's general replies
   GET  /api/version      mtimes of the page and the task file (auto-refresh)
+  GET  /api/review/items the review hub's items (review_items, default
+                         docs/review/items.json, written by review/review.py)
+                         merged with the person's answers, snoozes and resolved
+                         comment threads; ?id=ITEM returns one item
+  POST /api/review/answer
+                         an answer from the hub: approve / needs_changes /
+                         reject / choice / pick / done / read / comment, with an
+                         optional comment and a line or time anchor, is logged
+                         and forwarded like a message. snooze / unsnooze /
+                         resolve / unresolve are kept in state and the local
+                         inbox only (agents see them; nothing wakes a thread)
 
 Orchestrator replies live in the task file (written by buildlog_tasks.py
 reply): per task in "replies", general ones in "general_replies", each
@@ -57,7 +68,11 @@ MAX_BODY = 64 * 1024
 MAX_NOTE = 8000
 MAX_THREAD = 50
 EVENT = "buildlog_message"
-KINDS = ("task_update", "message", "test")
+KINDS = ("task_update", "message", "test", "review")
+REVIEW_DECISIONS = ("approve", "needs_changes", "reject", "choice", "pick", "done", "read", "comment",
+                    "snooze", "unsnooze", "resolve", "unresolve")
+QUIET_DECISIONS = ("snooze", "unsnooze", "resolve", "unresolve")    # recorded, never forwarded
+MAX_ANSWERS = 60                 # answers kept per item in state
 DELIVERED = ("sent", "local", "read")      # statuses that count as handed over
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 MSG_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -71,6 +86,9 @@ CONTENT_TYPES = {
     ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
     ".ico": "image/x-icon", ".mp4": "video/mp4", ".webm": "video/webm",
+    ".m4v": "video/mp4", ".mov": "video/quicktime", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+    ".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".oga": "audio/ogg",
+    ".opus": "audio/ogg", ".flac": "audio/flac",
     ".wasm": "application/wasm", ".pdf": "application/pdf",
 }
 for _ext in (".md", ".txt", ".log", ".py", ".sh", ".c", ".h", ".cc", ".cpp", ".hpp",
@@ -91,7 +109,8 @@ def load_settings(path=None):
         raise SystemExit("%s: expected a JSON object" % path)
     s = {"name": "buildlog", "title": "build log", "root": "..", "port": DEFAULT_PORT,
          "page": "docs/buildlog.html", "tasks": "docs/buildlog-tasks.json",
-         "signature_header": "x-buildlog-signature"}
+         "signature_header": "x-buildlog-signature",
+         "review_items": "docs/review/items.json", "review_page": "docs/review/index.html"}
     s.update(data)
     s["root"] = str((path.parent / s["root"]).resolve())
     s["settings_path"] = str(path)
@@ -157,8 +176,11 @@ class BuildlogApp:
 
     def __init__(self, root, state_dir, config_path, log=None, webhook_timeout=WEBHOOK_TIMEOUT,
                  page="docs/buildlog.html", tasks="docs/buildlog-tasks.json", name="buildlog",
-                 signature_header="x-buildlog-signature"):
+                 signature_header="x-buildlog-signature", review_items="docs/review/items.json",
+                 review_page="docs/review/index.html"):
         self.root = Path(root).resolve()
+        self.review_rel = Path(review_items)
+        self.review_page_rel = Path(review_page)
         self.page_rel = Path(page)
         self.tasks_rel = Path(tasks)
         self.name = name
@@ -402,13 +424,182 @@ class BuildlogApp:
                 return (self.root / rel).stat().st_mtime
             except OSError:
                 return None
-        return {"mtime": mtime(self.page_rel), "tasks_mtime": mtime(self.tasks_rel), "name": self.name}
+        return {"mtime": mtime(self.page_rel), "tasks_mtime": mtime(self.tasks_rel), "name": self.name,
+                "review_mtime": mtime(self.review_rel), "review_page_mtime": mtime(self.review_page_rel)}
+
+    # ---- review hub ----------------------------------------------------
+
+    def _review_state(self):
+        return self.state.setdefault("review", {})
+
+    def _read_review_items(self):
+        path = self.root / self.review_rel
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError):
+            raise ApiError(503, "review items unreadable")
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise ApiError(503, "review items file has no items list")
+        return [i for i in items if isinstance(i, dict) and isinstance(i.get("id"), str)]
+
+    @staticmethod
+    def _newer(a, b):
+        """The later of two {at, ...} records; either may be missing."""
+        if not isinstance(a, dict):
+            return b if isinstance(b, dict) else None
+        if not isinstance(b, dict):
+            return a
+        return b if _ts(b.get("at")) >= _ts(a.get("at")) else a
+
+    def review_payload(self, only=None):
+        items = self._read_review_items()
+        with self.lock:
+            st = self._review_state()
+            out = []
+            for it in items:
+                if only and it["id"] != only:
+                    continue
+                row = {k: v for k, v in it.items() if k != "on_answer"}
+                rs = st.get(it["id"]) or {}
+                answers = []
+                for a in rs.get("answers") or []:
+                    a = dict(a)
+                    m = self.msgs.get(a.get("id"))
+                    a["status"] = m["status"] if m else a.get("status", "queued")
+                    answers.append(a)
+                row["answers"] = answers
+                latest = None
+                for a in answers:                 # the latest real decision; comments and snoozes don't count
+                    if a.get("decision") not in ("comment",) + QUIET_DECISIONS:
+                        latest = a
+                row["answer"] = latest
+                # the agent's snooze (items.json, set by review.py) and the person's (state): the newer one wins
+                snooze = self._newer(it.get("snooze"), rs.get("snooze"))
+                row["snooze"] = snooze if snooze and not snooze.get("cleared") else None
+                resolved = dict(it["resolved"]) if isinstance(it.get("resolved"), dict) else {}
+                for key, rec in (rs.get("resolved") or {}).items():
+                    resolved[key] = self._newer(resolved.get(key), rec)
+                row["resolved"] = resolved
+                out.append(row)
+            if only and not out:
+                raise ApiError(404, "unknown item")
+            return {"items": out, "pending": len(self.pending), "delivery": self.delivery_mode(), "now": now_sec()}
+
+    @staticmethod
+    def _clean_anchor(anchor):
+        if not isinstance(anchor, dict) or anchor.get("type") not in ("line", "time"):
+            raise ApiError(400, "anchor must be {type: line|time, ...}")
+        clean = {"type": anchor["type"]}
+        if anchor["type"] == "line":
+            try:
+                clean["line"] = int(anchor.get("line"))
+            except (TypeError, ValueError):
+                raise ApiError(400, "anchor.line must be a number")
+            clean["doc"] = str(anchor.get("doc", ""))[:300]
+        else:
+            try:
+                clean["time_s"] = round(float(anchor.get("time_s")), 2)
+            except (TypeError, ValueError):
+                raise ApiError(400, "anchor.time_s must be a number")
+            clean["media"] = str(anchor.get("media", ""))[:300]
+        clean["excerpt"] = str(anchor.get("excerpt", ""))[:300]
+        return clean
+
+    @staticmethod
+    def thread_key(anchor):
+        """The comment thread an anchor belongs to: line:DOC#LINE or time:MEDIA@SECONDS (review.py uses the same)."""
+        if anchor["type"] == "line":
+            return "line:%s#%d" % (anchor.get("doc", ""), anchor["line"])
+        return "time:%s@%.1f" % (anchor.get("media", ""), anchor["time_s"])
+
+    def review_answer(self, body):
+        item_id = body.get("item_id")
+        items = {i["id"]: i for i in self._read_review_items()}
+        if not isinstance(item_id, str) or item_id not in items:
+            raise ApiError(404, "unknown item")
+        item = items[item_id]
+        decision = body.get("decision")
+        if decision not in REVIEW_DECISIONS:
+            raise ApiError(400, "decision must be one of %s" % ", ".join(REVIEW_DECISIONS))
+        comment = body.get("comment", "")
+        if not isinstance(comment, str):
+            raise ApiError(400, "comment must be text")
+        if len(comment) > MAX_NOTE:
+            raise ApiError(400, "comment too long")
+        choice = body.get("choice")
+        if decision in ("choice", "pick"):
+            options = [c.get("id") for c in (item.get("choices") or []) + (item.get("candidates") or []) if isinstance(c, dict)]
+            if not isinstance(choice, str) or choice not in options:
+                raise ApiError(400, "choice must be one of the item's options")
+        elif choice not in (None, ""):
+            raise ApiError(400, "choice only goes with a choice or pick decision")
+        if decision == "comment" and not comment.strip():
+            raise ApiError(400, "comment is empty")
+        anchor = body.get("anchor")
+        if anchor is not None:
+            anchor = self._clean_anchor(anchor)
+        if decision in ("resolve", "unresolve") and anchor is None:
+            raise ApiError(400, "resolve needs the anchor of the comment thread")
+        until, later = None, False
+        if decision == "snooze":
+            later = body.get("later") is True
+            if not later:
+                until = body.get("until")
+                if not isinstance(until, str) or _ts(until) == _ts(""):
+                    raise ApiError(400, "snooze needs until (an ISO date or time) or later: true")
+                until = _ts(until).astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        mid = body.get("id")
+        if mid is not None and not (isinstance(mid, str) and MSG_ID_RE.match(mid)):
+            raise ApiError(400, "id must be 32 hex characters")
+        quiet = decision in QUIET_DECISIONS
+        with self.lock:
+            if mid and mid in self.msgs:
+                return self._answer_result(mid, item_id, flush=not quiet)
+        payload = {"event": EVENT, "id": mid or uuid.uuid4().hex, "kind": "review",
+                   "item_id": item_id, "item_title": str(item.get("title", "")), "item_kind": str(item.get("kind", "")),
+                   "decision": decision, "choice": choice or "", "comment": comment, "anchor": anchor,
+                   "task_id": "", "task_title": "", "done": "", "note": comment, "sent_at": now_sec()}
+        record = {"id": payload["id"], "at": payload["sent_at"], "decision": decision, "choice": choice or "",
+                  "comment": comment, "anchor": anchor, "status": "queued"}
+        if decision == "snooze":
+            payload["until"] = record["until"] = until
+            payload["later"] = record["later"] = later
+        with self.lock:
+            self._append_inbox({"type": "message", "payload": payload})
+            self.msgs[payload["id"]] = {"payload": payload, "status": "queued"}
+            self.pending[payload["id"]] = {"attempts": 0, "error": None}
+            rs = self._review_state().setdefault(item_id, {"answers": []})
+            rs["answers"] = (rs.get("answers") or [])[-(MAX_ANSWERS - 1):] + [record]
+            if decision == "snooze":
+                rs["snooze"] = {"until": until, "later": later, "at": payload["sent_at"], "by": "you"}
+            elif decision == "unsnooze":
+                rs["snooze"] = {"cleared": True, "at": payload["sent_at"], "by": "you"}
+            elif decision in ("resolve", "unresolve"):
+                rs.setdefault("resolved", {})[self.thread_key(anchor)] = {
+                    "resolved": decision == "resolve", "at": payload["sent_at"], "by": "you"}
+            if quiet:                             # agents find it in the local inbox; no webhook wake-up
+                self._mark_delivered(payload["id"], None, "local")
+            self._save_state()
+        return self._answer_result(payload["id"], item_id, flush=not quiet)
+
+    def _answer_result(self, mid, item_id, flush=True):
+        res = self._send_result(mid, flush=flush)
+        with self.lock:
+            rs = self._review_state().get(item_id) or {}
+            rec = next((dict(a) for a in rs.get("answers") or [] if a.get("id") == mid), None)
+            if rec:
+                rec["status"] = self.msgs[mid]["status"]
+            res["answer"] = rec
+        return res
 
     # ---- sending -------------------------------------------------------
 
     def send(self, body):
         kind = body.get("kind")
-        if kind not in KINDS:
+        if kind not in KINDS or kind == "review":
             raise ApiError(400, "kind must be task_update, message or test")
         note = body.get("note", "")
         if not isinstance(note, str):
@@ -583,6 +774,22 @@ class BuildlogApp:
         return real
 
 
+def byte_range(header, size):
+    """(start, end) for one "bytes=A-B", "bytes=A-" or "bytes=-N" Range header; None sends the whole file;
+    "unsatisfiable" for a range past the end."""
+    m = re.match(r"^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$", header or "")
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    if not m.group(1):
+        n = int(m.group(2))
+        return (max(0, size - n), size - 1) if n and size else "unsatisfiable"
+    start = int(m.group(1))
+    end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+    if start >= size or end < start:
+        return "unsatisfiable"
+    return start, end
+
+
 def content_type(path):
     ext = path.suffix.lower()
     if ext in CONTENT_TYPES:
@@ -617,7 +824,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(length))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")   # the review hub shows rendered docs in a frame
         self.send_header("Referrer-Policy", "no-referrer")
         for k, v in extra:
             self.send_header(k, v)
@@ -724,6 +931,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, self.app.version())
         if path == "/api/messages":
             return self._json(200, self.app.messages_payload())
+        if path == "/api/review/items":
+            only = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [None])[0]
+            return self._json(200, self.app.review_payload(only))
         if path.startswith("/api/"):
             raise ApiError(404, "not found")
         if path == "/" and not (self.app.root / "index.html").is_file():
@@ -735,22 +945,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         real = self.app.resolve_static(self.path)
         size = real.stat().st_size
-        self._headers(200, content_type(real), size,
-                      [("Last-Modified", self.date_time_string(real.stat().st_mtime))])
+        start, end = 0, size - 1
+        status = 200
+        extra = [("Last-Modified", self.date_time_string(real.stat().st_mtime)), ("Accept-Ranges", "bytes")]
+        span = byte_range(self.headers.get("Range"), size)
+        if span == "unsatisfiable":
+            self._headers(416, TEXT, 0, [("Content-Range", "bytes */%d" % size)])
+            return
+        if span:                                  # players seek with ranges (one range; others get the whole file)
+            start, end = span
+            status = 206
+            extra.append(("Content-Range", "bytes %d-%d/%d" % (start, end, size)))
+        self._headers(status, content_type(real), end - start + 1, extra)
         if self.command == "HEAD":
             return
         with open(real, "rb") as f:
-            while True:
-                chunk = f.read(1 << 16)
+            f.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = f.read(min(1 << 16, left))
                 if not chunk:
                     break
                 self.wfile.write(chunk)
+                left -= len(chunk)
 
     def _post(self):
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/send":
             self._check_csrf()
             return self._json(200, self.app.send(self._read_json()))
+        if path == "/api/review/answer":
+            self._check_csrf()
+            return self._json(200, self.app.review_answer(self._read_json()))
         if path.startswith("/api/tasks/"):
             self._check_csrf()
             task_id = urllib.parse.unquote(path[len("/api/tasks/"):])
@@ -800,7 +1026,8 @@ def main(argv=None):
             os.replace(str(log_path), str(log_path) + ".1")
         log = sys.stderr = sys.stdout = open(log_path, "a", encoding="utf-8", buffering=1)
     server = make_server(root, state_dir, config, port, log=log, page=s["page"], tasks=s["tasks"], name=s["name"],
-                         signature_header=s["signature_header"])
+                         signature_header=s["signature_header"], review_items=s["review_items"],
+                         review_page=s["review_page"])
     app = server.app
     stop = threading.Event()
     threading.Thread(target=app.retry_loop, args=(stop, args.retry_seconds), daemon=True).start()
