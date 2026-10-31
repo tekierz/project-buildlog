@@ -14,7 +14,14 @@
   setup.py remove --project DIR [--purge] [--files]
 
 Every step prints "ok" or "FAIL" with the reason. Nothing here prints the
-webhook secret or URL: they live only in ~/.config/<name>/ (mode 600).
+webhook secret or URL: they live only in ~/.config/<name>/ (mode 600; on
+Windows an access list that admits only you).
+
+The server is kept running by a service manager (--service-manager):
+systemd (a user service; the default on Linux), schtasks (a per-user Windows
+Scheduled Task that starts it at logon with pythonw; the default on Windows)
+or none (no manager: init starts it once, detached, and on Windows writes
+tools/buildlog/start-server.cmd for later starts).
 Re-running init is safe: scripts and the unit are refreshed, while the page,
 the task file and the secret are kept. Python standard library only.
 """
@@ -37,6 +44,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from xml.sax.saxutils import escape as xml_escape
 
 SKILL = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL / "scripts"
@@ -49,6 +57,15 @@ GUARD_START = "# project-buildlog: private and local-only files (never commit th
 GUARD_END = "# end project-buildlog"
 PLACEHOLDER_RE = re.compile(r"@@[A-Z_]+@@")
 FAILED = []
+WINDOWS = os.name == "nt"
+PY = "python" if WINDOWS else "python3"      # how commands are spelled in printed hints
+MANAGERS = ("systemd", "schtasks", "none")
+# a task's command that writes a secret to a file only the user can read (the T3 webhook prompt shows it)
+SECRET_CMD = ("$d = \"$HOME/.config/%(slug)s-secrets\"; New-Item -ItemType Directory -Force $d | Out-Null; "
+              "icacls $d /inheritance:r /grant:r \"${env:USERNAME}:(OI)(CI)F\" | Out-Null; "
+              "Read-Host 'NAME' -AsSecureString | ConvertFrom-SecureString -AsPlainText | Set-Content -NoNewline \"$d/NAME.key\""
+              if WINDOWS else "mkdir -p ~/.config/%(slug)s-secrets && chmod 700 ~/.config/%(slug)s-secrets && "
+              "(umask 077; cat > ~/.config/%(slug)s-secrets/NAME.key)")
 
 
 # ---- output -----------------------------------------------------------------
@@ -83,12 +100,19 @@ def write_atomic(path, text, mode=0o644):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        for i in range(40):                   # Windows: a reader may briefly hold the target open
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if not WINDOWS or i == 39:
+                    raise
+                time.sleep(0.05)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -115,9 +139,32 @@ def keep_sections(text, wanted):
     return text
 
 
+def shell_quote(text):
+    """Quote one argument for the user's shell: cmd/PowerShell double quotes on Windows, POSIX quoting elsewhere."""
+    return subprocess.list2cmdline([str(text)]) if WINDOWS else shlex.quote(str(text))
+
+
 def run(cmd, cwd=None, check=False, env=None, timeout=120):
     return subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True,
-                          check=check, env=env, timeout=timeout)
+                          encoding="utf-8", errors="replace", check=check, env=env, timeout=timeout)
+
+
+def utf8_stdio():
+    """Windows pipes default to the ANSI code page: use UTF-8 there, as on every other platform."""
+    if not WINDOWS:
+        return
+    for f in (sys.stdin, sys.stdout, sys.stderr):
+        if f is not None and hasattr(f, "reconfigure") and not f.isatty():
+            f.reconfigure(encoding="utf-8", errors="replace" if f is sys.stdin else "backslashreplace")
+
+
+def load_script(name):
+    """One of this skill's scripts as a module (setup.py shares its lock with the task CLI)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bl_" + name, SCRIPTS / ("%s.py" % name))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def git(project, *args):
@@ -136,15 +183,110 @@ def port_free(port):
 
 
 def port_owner(port):
+    if WINDOWS:
+        pid = port_pid(port)
+        return "pid %s: %s" % (pid, proc_cmdline(pid) or "?") if pid else ""
     r = run(["ss", "-ltnpH", "sport = :%d" % port])
     return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def port_hint(port):
+    if WINDOWS:
+        return "netstat -ano | findstr :%d" % port
+    return "ss -ltnp 'sport = :%d'" % port
+
+
+# ---- Windows: listening process, private files ------------------------------------------------
+
+def port_pid(port):
+    """PID listening on 127.0.0.1:port (Windows, from netstat; locale-independent), or None."""
+    r = run(["netstat", "-ano", "-p", "TCP"])
+    for line in r.stdout.splitlines():
+        f = line.split()
+        if len(f) == 5 and f[0] == "TCP" and f[1].rsplit(":", 1)[-1] == str(port) and f[2].endswith(":0"):
+            return f[4]
+    return None
+
+
+def proc_cmdline(pid):
+    if not pid:
+        return ""
+    r = run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CommandLine" % int(pid)], timeout=30)
+    return r.stdout.strip()
+
+
+_USER = []
+
+
+def current_user():
+    """(DOMAIN\\user, SID) of the user running this, from whoami (Windows)."""
+    if not _USER:
+        r = run(["whoami", "/user", "/fo", "csv", "/nh"])
+        m = re.match(r'"([^"]+)","(S-[0-9-]+)"', r.stdout.strip())
+        if not m:
+            fail("whoami /user gave no SID: %s" % (r.stderr or r.stdout).strip())
+        _USER.extend(m.groups())
+    return _USER[0], _USER[1]
+
+
+def make_private(path):
+    """Only you may open path: mode 700/600, or on Windows an access list with only your account."""
+    path = Path(path)
+    if not WINDOWS:
+        os.chmod(path, 0o700 if path.is_dir() else 0o600)
+        return
+    _, sid = current_user()
+    grant = "*%s:(OI)(CI)F" % sid if path.is_dir() else "*%s:F" % sid
+    # /reset drops explicit entries (Python 3.13+ mkdir(mode=0o700) adds SYSTEM, Administrators and
+    # OWNER RIGHTS); /inheritance:r then drops the inherited ones, leaving only the grant.
+    r = run(["icacls", str(path), "/reset"])
+    if r.returncode == 0:
+        r = run(["icacls", str(path), "/inheritance:r", "/grant:r", grant])
+    if r.returncode != 0:
+        fail("icacls could not make %s private: %s" % (path, (r.stderr or r.stdout).strip()))
+
+
+def acl_principals(path):
+    """Accounts in the access list of path (Windows icacls)."""
+    r = run(["icacls", str(path)])
+    if r.returncode != 0:
+        return None
+    names = []
+    for i, line in enumerate(r.stdout.splitlines()):
+        if not line.strip():
+            break
+        if i == 0:
+            if not line.startswith(str(path)):
+                return None
+            line = line[len(str(path)):]
+        m = re.match(r"\s*(.+?):\(", line)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def private_problem(path, folder=False):
+    """None if only you can open path, else a short reason."""
+    path = Path(path)
+    if not WINDOWS:
+        mode = path.stat().st_mode & 0o777
+        if folder:
+            return None if mode & 0o077 == 0 else "mode %o, expected 700" % mode
+        return None if mode == 0o600 else "mode %o, expected 600" % mode
+    names = acl_principals(path)
+    if names is None:
+        return "icacls could not read the access list"
+    me = current_user()[0].lower()
+    others = sorted(set(n for n in names if n.lower() != me))
+    return None if names and not others else "also open to %s" % ", ".join(others or ["nobody (empty list)"])
 
 
 def pick_port(name):
     base = 33650 + int(hashlib.sha256(name.encode()).hexdigest(), 16) % 300
     for i in range(300):
         p = 33650 + (base - 33650 + i) % 300
-        if port_free(p):
+        if p != 33641 and port_free(p):
             return p
     raise SystemExit("no free port in 33650-33949; pass --port")
 
@@ -180,6 +322,12 @@ def py_path():
     return "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else sys.executable
 
 
+def pyw_path():
+    """Windows: pythonw.exe next to this Python (no console window), else this Python."""
+    cand = Path(sys.executable).with_name("pythonw.exe")
+    return str(cand) if cand.is_file() else sys.executable
+
+
 def unit_quote(p):
     p = str(p).replace("%", "%%")
     return '"%s"' % p if " " in p else p
@@ -202,6 +350,7 @@ class Ctx:
         self.tasks = self.root / self.tasks_rel
         self.port = int(settings["port"])
         self.service = settings["service"]
+        self.manager = settings.get("service_manager") or ("schtasks" if WINDOWS else "systemd")
         self.config_home = Path(homes.get("config_home") or Path.home() / ".config")
         self.state_home = Path(homes.get("state_home") or Path.home() / ".local/state")
         self.systemd_dir = Path(homes.get("systemd_dir") or self.config_home / "systemd/user")
@@ -210,6 +359,8 @@ class Ctx:
         self.state = self.state_home / self.name
         self.unit = self.systemd_dir / ("%s.service" % self.service)
         self.unit_in_repo = self.tools / ("%s.service" % self.service)
+        self.task_xml = self.state / ("%s.task.xml" % self.service)      # Windows: outside the repo
+        self.start_script = self.tools / "start-server.cmd"
         self.live_url = "http://127.0.0.1:%d/%s" % (self.port, self.page_rel)
 
     @property
@@ -237,7 +388,16 @@ class Ctx:
             "AGENT_CLI_ABS": str(self.tools / "buildlog_agent.py"),
             "AGENT_CLI_REL": "%s/buildlog_agent.py" % self.tools_rel,
             "STATE_DIR": "~/.local/state/%s/" % self.name, "MEDIA_DIR": s["media_dir"].rstrip("/") + "/",
-            "EVIDENCE_DIR": s["evidence_dirs"][0], "NS": self.name,
+            "EVIDENCE_DIR": s["evidence_dirs"][0], "NS": self.name, "PY": PY,
+            "SECRET_CMD": SECRET_CMD % {"slug": s["slug"]},
+            "STATUS_CMD": {"systemd": "systemctl --user status %s" % self.service,
+                           "schtasks": "schtasks /Query /TN %s" % self.service}.get(
+                self.manager, "%s -I %s status --project %s" % (PY, SCRIPTS / "setup.py", self.root)),
+            "LOGS_CMD": "journalctl --user -u %s -n 50" % self.service if self.manager == "systemd"
+                        else str(self.state / "server.log"),
+            "RESTART_CMD": {"systemd": "systemctl --user restart %s" % self.service,
+                            "schtasks": "schtasks /End /TN %s; schtasks /Run /TN %s" % (self.service, self.service)}.get(
+                self.manager, "%s -I %s" % (PY, self.server)),
         }
 
 
@@ -255,7 +415,7 @@ def find_settings(project):
         if ".git" in cand.parts or "node_modules" in cand.parts:
             continue
         try:
-            data = json.loads(cand.read_text())
+            data = json.loads(cand.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         if isinstance(data, dict) and data.get("generator") == "project-buildlog":
@@ -265,7 +425,7 @@ def find_settings(project):
 
 def load_ctx(args):
     p = find_settings(args.project)
-    s = json.loads(p.read_text())
+    s = json.loads(p.read_text(encoding="utf-8"))
     homes = s.pop("_homes", {}) or {}
     for k in ("config_home", "state_home", "systemd_dir"):
         if getattr(args, k, None):
@@ -275,7 +435,7 @@ def load_ctx(args):
 
 def read_config(ctx):
     try:
-        data = json.loads(ctx.config.read_text())
+        data = json.loads(ctx.config.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -283,8 +443,10 @@ def read_config(ctx):
 
 def write_config(ctx, data):
     ctx.config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(ctx.config_dir, 0o700)
+    make_private(ctx.config_dir)
     write_atomic(ctx.config, json.dumps(data, indent=1) + "\n", mode=0o600)
+    if WINDOWS:
+        make_private(ctx.config)
 
 
 # ---- T3 arguments ---------------------------------------------------------------
@@ -305,8 +467,8 @@ def t3_arguments(ctx):
         fail("no secret in %s" % ctx.config)
     vals = ctx.values()
     vals["PROJECT"] = ctx.s["title"]
-    prompt = render((TEMPLATES / "t3-webhook-prompt.md").read_text(), vals, "webhook prompt")
-    hb = render((TEMPLATES / "t3-heartbeat-prompt.md").read_text(), vals, "heartbeat prompt")
+    prompt = render((TEMPLATES / "t3-webhook-prompt.md").read_text(encoding="utf-8"), vals, "webhook prompt")
+    hb = render((TEMPLATES / "t3-heartbeat-prompt.md").read_text(encoding="utf-8"), vals, "heartbeat prompt")
     webhook = {"tool": "schedule_task",
                "note": "Private key-bearing storage. Do not load into model context; use t3-args --redacted and request_secret.",
                "arguments": {"title": "%s: build log messages" % ctx.s["title"], "prompt": prompt,
@@ -340,14 +502,14 @@ def seed_tasks(ctx, how):
     if how == "none":
         return []
     if how != "default":
-        data = json.loads(Path(how).read_text())
+        data = json.loads(Path(how).read_text(encoding="utf-8"))
         return data["tasks"] if isinstance(data, dict) else data
     return [{"id": "try-the-panel", "kind": "action",
              "title": "Try the panel: tick this, write a note and press Send",
              "details": ("This checks the whole path from this page to the orchestrator. Tick Done, write any short "
                          "note (for example \"hello\") and press Send. The status should say Sent, and the "
                          "orchestrator should answer in its thread within a minute."),
-             "how": "xdg-open %s" % ctx.live_url}]
+             "how": ("start %s" if WINDOWS else "xdg-open %s") % ctx.live_url}]
 
 
 def cmd_init(args):
@@ -373,7 +535,7 @@ def cmd_init(args):
         except SystemExit:
             pass
     if sp.is_file():
-        old = json.loads(sp.read_text())
+        old = json.loads(sp.read_text(encoding="utf-8"))
         ok("existing setup found (%s): refreshing it" % sp.relative_to(project))
     # Omitted options keep installed values. An upgrade must not switch the page,
     # task file, private credential identity or custom tools directory to defaults.
@@ -391,6 +553,10 @@ def cmd_init(args):
     if not re.match(r"^[a-z0-9][a-z0-9_.-]{0,62}$", name):
         fail("--name must be lowercase letters, digits, dot, dash or underscore")
     service = args.service or old.get("service") or name
+    manager = args.service_manager if args.service_manager != "auto" else (
+        old.get("service_manager") or ("schtasks" if WINDOWS else "systemd"))
+    if manager == "systemd" and WINDOWS or manager == "schtasks" and not WINDOWS:
+        fail("--service-manager %s does not work on this system" % manager)
     port = args.port or old.get("port") or pick_port(name)
     homes = {key: getattr(args, key) or (old.get("_homes") or {}).get(key)
              for key in ("config_home", "state_home", "systemd_dir")}
@@ -400,18 +566,20 @@ def cmd_init(args):
         fail("unknown sections: %s (choose from %s)" % (", ".join(bad), ", ".join(SECTIONS)))
     settings = {
         "generator": "project-buildlog", "name": name, "title": title, "slug": slug,
-        "root": os.path.relpath(project, project / args.tools_dir), "port": int(port),
-        "page": args.page, "tasks": args.tasks or str(Path(args.page).with_name("buildlog-tasks.json")),
+        "root": Path(os.path.relpath(project, project / args.tools_dir)).as_posix(), "port": int(port),
+        "page": args.page, "tasks": args.tasks or Path(args.page).with_name("buildlog-tasks.json").as_posix(),
         "tools_dir": args.tools_dir, "service": service,
         "signature_header": args.header or (old or {}).get("signature_header") or "x-%s-signature" % slug,
         "evidence_dirs": [args.evidence_dir], "media_dir": args.media_dir, "sections": sections,
         "agent_state": old.get("agent_state", str(Path(args.page).with_name("buildlog-state.json"))),
         "rules_docs": args.rules_doc,
     }
+    if manager != "systemd":
+        settings["service_manager"] = manager
     if any(homes.values()):
         settings["_homes"] = {k: v for k, v in homes.items() if v}
     ctx = Ctx(project, settings, homes)
-    ok("name %s, service %s, port %d, header %s" % (name, service, ctx.port, settings["signature_header"]))
+    ok("name %s, service %s (%s), port %d, header %s" % (name, service, manager, ctx.port, settings["signature_header"]))
     ours = False
     if not port_free(ctx.port):
         found, _ = wait_for_server(ctx.port, name, seconds=1)
@@ -419,9 +587,9 @@ def cmd_init(args):
             ours = True
             ok("port %d is held by this build log's own server (will restart it)" % ctx.port)
         else:
-            fail("port %d is in use by something else: %s\n        Find it with: ss -ltnp 'sport = :%d'. "
+            fail("port %d is in use by something else: %s\n        Find it with: %s. "
                  "An old ad-hoc server (python3 -m http.server) is the usual cause: stop it, or pick another --port."
-                 % (ctx.port, port_owner(ctx.port) or "(unknown process)", ctx.port))
+                 % (ctx.port, port_owner(ctx.port) or "(unknown process)", port_hint(ctx.port)))
     else:
         ok("port %d is free" % ctx.port)
 
@@ -508,10 +676,20 @@ def cmd_init(args):
     if requested_delivery is not None and cfg.get("delivery") != requested_delivery:
         cfg["delivery"] = requested_delivery
         write_config(ctx, cfg)
-    mode = ctx.config.stat().st_mode & 0o777
-    if mode != 0o600:
-        fail("%s has mode %o, expected 600" % (ctx.config, mode))
-    ok("mode 600, folder mode %o, delivery %s" % (ctx.config_dir.stat().st_mode & 0o777, cfg.get("delivery", "webhook")))
+    why = private_problem(ctx.config)
+    if why:
+        fail("%s is not private: %s" % (ctx.config, why))
+    if WINDOWS:
+        why = private_problem(ctx.config_dir, folder=True)
+        if why:
+            fail("%s is not private: %s" % (ctx.config_dir, why))
+        ok("only %s can open the folder and webhook.json (access list); delivery %s"
+           % (current_user()[0], cfg.get("delivery", "webhook")))
+    else:
+        ok("mode 600, folder mode %o, delivery %s" % (ctx.config_dir.stat().st_mode & 0o777, cfg.get("delivery", "webhook")))
+    ctx.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if WINDOWS:
+        make_private(ctx.state)
     inside = run(["git", "-C", str(ctx.config_dir), "rev-parse", "--show-toplevel"])
     if inside.returncode == 0:
         warn("%s is inside a git work tree (%s): make sure webhook.json is ignored there"
@@ -520,18 +698,29 @@ def cmd_init(args):
         ok("the config folder is not inside any git work tree")
     write_t3_args(ctx, webhook_too=not cfg.get("url"))
 
-    step("7. Install and start the user service")
-    unit = render((TEMPLATES / "buildlog.service").read_text(), dict(ctx.values(), **{
-        "PROJECT": title, "UNIT_IN_REPO": "%s/%s.service" % (args.tools_dir, service),
-        "DOC_URL": "file://" + urllib.parse.quote(str(ctx.page)), "PYTHON": py_path(),
-        "ROOT": str(ctx.root).replace("%", "%%"), "SERVER_ABS": unit_quote(ctx.server),
-        "CONFIG_ABS": unit_quote(ctx.config), "STATE_ABS": unit_quote(ctx.state)}), "unit")
-    write_atomic(ctx.unit_in_repo, unit)
-    ok("unit file %s" % ctx.unit_in_repo.relative_to(project))
-    if args.no_service:
-        warn("--no-service: not installed. Start it by hand with: python3 -I %s" % shlex.quote(str(ctx.server)))
+    if ctx.manager == "systemd":
+        step("7. Install and start the user service")
+        unit = render((TEMPLATES / "buildlog.service").read_text(encoding="utf-8"), dict(ctx.values(), **{
+            "PROJECT": title, "UNIT_IN_REPO": "%s/%s.service" % (args.tools_dir, service),
+            "DOC_URL": "file://" + urllib.parse.quote(str(ctx.page)), "PYTHON": py_path(),
+            "ROOT": str(ctx.root).replace("%", "%%"), "SERVER_ABS": unit_quote(ctx.server),
+            "CONFIG_ABS": unit_quote(ctx.config), "STATE_ABS": unit_quote(ctx.state)}), "unit")
+        write_atomic(ctx.unit_in_repo, unit)
+        ok("unit file %s" % ctx.unit_in_repo.relative_to(project))
+        if args.no_service:
+            warn("--no-service: not installed. Start it by hand with: python3 -I %s" % shell_quote(str(ctx.server)))
+        else:
+            install_service(ctx, unit, restart=ours)
     else:
-        install_service(ctx, unit, restart=ours)
+        step("7. Start the server (%s)" % ("Windows logon task" if ctx.manager == "schtasks" else "no service manager"))
+        if WINDOWS:
+            write_start_script(ctx)
+        if args.no_service:
+            warn("--no-service: not started. Start it by hand with: %s -I %s" % (PY, shell_quote(ctx.server)))
+        elif ctx.manager == "schtasks":
+            install_schtasks(ctx, restart=ours)
+        else:
+            start_detached(ctx, restart=ours)
 
     step("8. Write shared agent rules and compact entry points")
     rules_rel = write_rules(ctx)
@@ -569,7 +758,7 @@ def check_page(text, sections):
 
 def guard_gitignore(ctx):
     gi = ctx.root / ".gitignore"
-    text = gi.read_text() if gi.exists() else ""
+    text = gi.read_text(encoding="utf-8") if gi.exists() else ""
     lines = [GUARD_START, "webhook.json", "*.webhook.json", ctx.s["media_dir"].rstrip("/") + "/",
              "%s/**/__pycache__/" % ctx.tools_rel, GUARD_END]
     block = "\n".join(lines) + "\n"
@@ -628,14 +817,14 @@ def shared_rules_rel(ctx):
 def write_rules(ctx):
     """Write the shared rules beside the page and a small managed block in each entry point."""
     rel = shared_rules_rel(ctx)
-    rules = render((TEMPLATES / "agent-rules.md").read_text(), dict(ctx.values(), PROJECT=ctx.s["title"]), "rules")
+    rules = render((TEMPLATES / "agent-rules.md").read_text(encoding="utf-8"), dict(ctx.values(), PROJECT=ctx.s["title"]), "rules")
     write_atomic(ctx.root / rel, rules)
     snippet = ('%s\nBuild log: %s. Read `%s` when handling buildlog work.\n'
-               'Start with `python3 -I "%s" brief`; details only as needed.\n%s\n' %
-               (RULES_START, ctx.live_url, rel, ctx.tools / "buildlog_agent.py", RULES_END))
+               'Start with `%s -I "%s" brief`; details only as needed.\n%s\n' %
+               (RULES_START, ctx.live_url, rel, PY, ctx.tools / "buildlog_agent.py", RULES_END))
     for rules_doc in ctx.s.get("rules_docs", []):
         doc = ctx.root / rules_doc
-        prev = doc.read_text() if doc.exists() else ""
+        prev = doc.read_text(encoding="utf-8") if doc.exists() else ""
         if RULES_START in prev:
             if prev.count(RULES_START) != 1 or prev.count(RULES_END) != 1:
                 fail("%s has malformed buildlog markers" % rules_doc)
@@ -653,16 +842,168 @@ def write_rules(ctx):
     return rel
 
 
+
+def server_cmd(ctx, python):
+    return [python, "-I", str(ctx.server), "--config", str(ctx.config), "--state-dir", str(ctx.state)]
+
+
+def is_own_server(ctx, pid):
+    """Is pid this project's server (its command line names our server script)?"""
+    line = proc_cmdline(pid).replace("/", "\\").lower() if WINDOWS else ""
+    return bool(pid) and str(ctx.server).replace("/", "\\").lower() in line
+
+
+def stop_own_server(ctx, seconds=8):
+    """Stop whatever of ours holds the port (Windows: kill by PID only if it is our server script)."""
+    deadline = time.time() + seconds
+    while not port_free(ctx.port) and time.time() < deadline:
+        pid = port_pid(ctx.port) if WINDOWS else None
+        if WINDOWS and is_own_server(ctx, pid):
+            run(["taskkill", "/PID", str(pid), "/F"])
+        time.sleep(0.4)
+    return port_free(ctx.port)
+
+
+def check_answers(ctx, how):
+    good, why = wait_for_server(ctx.port, ctx.name)
+    if not good:
+        log = ctx.state / "server.log"
+        tail = "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]) if log.exists() else ""
+        fail("the server does not answer on port %d (%s). Last log lines (%s):\n%s\n        Port owner: %s"
+             % (ctx.port, why, log, tail, port_owner(ctx.port) or "none"))
+    pid = port_pid(ctx.port) if WINDOWS else None
+    if WINDOWS and not is_own_server(ctx, pid):
+        fail("port %d is answered by another process (%s), not this project's server" % (ctx.port, port_owner(ctx.port)))
+    ok("%s (pid %s), serving %s" % (how, pid or "?", ctx.live_url))
+    return pid
+
+
+def write_start_script(ctx):
+    """tools/buildlog/start-server.cmd: start the server by hand, without a console window."""
+    text = ("@echo off\r\n"
+            "rem Start the %s build log server on 127.0.0.1:%d without a console window.\r\n"
+            "rem Written by the project-buildlog skill (setup.py). With the logon task %s you rarely need this;\r\n"
+            "rem  setup.py status shows whether it runs. Logs go to %%USERPROFILE%%\\.local\\state\\%s\\server.log.\r\n"
+            "start \"\" \"%s\" -I \"%%~dp0buildlog_server.py\" %%*\r\n"
+            % (ctx.s["title"].replace("%", "%%"), ctx.port, ctx.service, ctx.name, pyw_path()))
+    write_atomic(ctx.start_script, text)
+    ok("start script %s" % ctx.start_script.relative_to(ctx.root))
+
+
+def start_detached(ctx, restart=False):
+    """--service-manager none: start the server once, in the background, logging to the state folder."""
+    if restart and not stop_own_server(ctx):
+        fail("port %d is still in use: %s" % (ctx.port, port_owner(ctx.port)))
+    if WINDOWS:
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        subprocess.Popen(server_cmd(ctx, pyw_path()), cwd=str(ctx.root), creationflags=flags, close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        log = open(ctx.state / "server.log", "ab")
+        subprocess.Popen(server_cmd(ctx, sys.executable), cwd=str(ctx.root), start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    check_answers(ctx, "server started in the background")
+    warn("no service manager: nothing restarts it after a reboot or crash. Start it again with %s"
+         % (ctx.start_script.relative_to(ctx.root) if WINDOWS else "%s -I %s" % (PY, ctx.server)))
+
+
+def task_xml(ctx):
+    """A per-user Scheduled Task: start the server at logon, never time out, run on battery."""
+    user, _ = current_user()
+    q = lambda p: '"%s"' % p
+    args = "-I %s --config %s --state-dir %s" % (q(ctx.server), q(ctx.config), q(ctx.state))
+    return """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Build log page and Your tasks API (%(title)s) on %(url)s. Installed by the project-buildlog skill.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled><UserId>%(user)s</UserId></LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author"><UserId>%(user)s</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%(cmd)s</Command>
+      <Arguments>%(args)s</Arguments>
+      <WorkingDirectory>%(root)s</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+""" % {"title": xml_escape(ctx.s["title"]), "url": xml_escape(ctx.live_url), "user": xml_escape(user),
+       "cmd": xml_escape(pyw_path()), "args": xml_escape(args), "root": xml_escape(str(ctx.root))}
+
+
+def schtasks_state(ctx):
+    """Status column of the task ("Running", "Ready", ...), or "" when there is no such task."""
+    r = run(["schtasks", "/Query", "/TN", ctx.service, "/FO", "CSV", "/NH"])
+    if r.returncode != 0:
+        return ""
+    f = [x.strip('"') for x in r.stdout.strip().splitlines()[-1].split('","')]
+    return f[2] if len(f) >= 3 else "?"
+
+
+def install_schtasks(ctx, restart=False):
+    ctx.state.mkdir(parents=True, exist_ok=True)
+    with open(ctx.task_xml, "w", encoding="utf-16") as f:
+        f.write(task_xml(ctx))
+    r = run(["schtasks", "/Create", "/TN", ctx.service, "/XML", str(ctx.task_xml), "/F"])
+    if r.returncode != 0:
+        fail("schtasks /Create: %s" % (r.stderr or r.stdout).strip())
+    ok("logon task %s (definition in %s)" % (ctx.service, ctx.task_xml))
+    if restart or not port_free(ctx.port):    # restart also picks up refreshed scripts on a re-run
+        run(["schtasks", "/End", "/TN", ctx.service])
+        if not stop_own_server(ctx):
+            fail("port %d is still in use: %s" % (ctx.port, port_owner(ctx.port)))
+    r = run(["schtasks", "/Run", "/TN", ctx.service])
+    if r.returncode != 0:
+        fail("schtasks /Run: %s" % (r.stderr or r.stdout).strip())
+    check_answers(ctx, "logon task %s running" % ctx.service)
+    warn("a logon task runs while you are logged in (like a systemd user service without lingering); "
+         "logs: %s" % (ctx.state / "server.log"))
+
+
+def restart_server(ctx):
+    """Restart through the project's service manager (change-port)."""
+    if ctx.manager == "systemd":
+        if ctx.unit.exists():
+            systemctl("restart", "%s.service" % ctx.service)
+            return True
+        return False
+    if ctx.manager == "schtasks":
+        if not schtasks_state(ctx):
+            return False
+        run(["schtasks", "/End", "/TN", ctx.service])
+        stop_own_server(ctx)
+        run(["schtasks", "/Run", "/TN", ctx.service])
+        return True
+    start_detached(ctx, restart=True)
+    return True
+
+
 def print_next_steps(ctx, cfg):
     if cfg.get("delivery") == "local":
-        print("\nLocal inbox ready. Read: python3 -I %s inbox --limit 5\nPage: %s" % (shlex.quote(str(ctx.cli)), ctx.live_url))
+        print("\nLocal inbox ready. Read: python3 -I %s inbox --limit 5\nPage: %s" % (shell_quote(str(ctx.cli)), ctx.live_url))
         return
     a = ctx.config_dir / "t3-webhook-task.json"
     b = ctx.config_dir / "t3-heartbeat-task.json"
     if cfg.get("url"):
         print("\n== Already wired to a webhook (host %s). Check it with:\n     python3 -I %s --project %s --real"
-              % (urllib.parse.urlsplit(cfg["url"]).hostname, shlex.quote(str(SCRIPTS / "verify.py")),
-                 shlex.quote(str(ctx.root))))
+              % (urllib.parse.urlsplit(cfg["url"]).hostname, PY, shell_quote(str(SCRIPTS / "verify.py")),
+                 shell_quote(str(ctx.root))))
         return
     print("""
 == Remaining steps (see references/setup.md)
@@ -679,22 +1020,22 @@ A. In the orchestrator thread (the thread that should receive messages), create 
      dedupe {replayKey {{body.id}}}, filters [body.event equals %(event)s]
 
 B. Store the returned webhookUrl (stdin, so it stays out of argv and shell history):
-     printf '%%s' 'WEBHOOK_URL' | python3 -I %(setup)s set-url --project %(root)s
+     printf '%%s' 'WEBHOOK_URL' | %(py)s -I %(setup)s set-url --project %(root)s
    No webhookUrl in the result means T3 Connect remote access is off: ask the user to turn it on.
 
 C. Check the whole path:
-     python3 -I %(verify)s --project %(root)s            (tests, fake webhook, service, CSRF)
-     python3 -I %(verify)s --project %(root)s --real     (signed test to T3 + forged ones)
+     %(py)s -I %(verify)s --project %(root)s            (tests, fake webhook, service, CSRF)
+     %(py)s -I %(verify)s --project %(root)s --real     (signed test to T3 + forged ones)
    Then confirm the test run with its nonce arrived in the orchestrator thread.
 
 D. Only if the user requests an hourly heartbeat: schedule_task with the arguments in
      %(b)s
 
 Page: %(url)s   Service: %(service)s   Delivery: %(delivery)s""" % {
-        "a": a, "b": b, "header": ctx.s["signature_header"], "event": EVENT, "setup": shlex.quote(str(SCRIPTS / "setup.py")),
-        "config": shlex.quote(str(ctx.config)),
-        "verify": shlex.quote(str(SCRIPTS / "verify.py")), "root": shlex.quote(str(ctx.root)), "url": ctx.live_url, "service": ctx.service,
-        "delivery": cfg.get("delivery", "webhook")})
+        "a": a, "b": b, "header": ctx.s["signature_header"], "event": EVENT, "setup": shell_quote(str(SCRIPTS / "setup.py")),
+        "config": shell_quote(str(ctx.config)),
+        "verify": shell_quote(str(SCRIPTS / "verify.py")), "root": shell_quote(str(ctx.root)), "url": ctx.live_url, "service": ctx.service,
+        "delivery": cfg.get("delivery", "webhook"), "py": PY})
 
 
 # ---- maintenance ----------------------------------------------------------------------
@@ -702,7 +1043,7 @@ Page: %(url)s   Service: %(service)s   Delivery: %(delivery)s""" % {
 def cmd_set_url(args):
     ctx, _ = load_ctx(args)
     step("Store the webhook URL")
-    url = (sys.stdin.read() if not args.url_file else Path(args.url_file).read_text()).strip()
+    url = (sys.stdin.read() if not args.url_file else Path(args.url_file).read_text(encoding="utf-8")).strip()
     try:
         parts = urllib.parse.urlsplit(url)
     except ValueError:
@@ -721,7 +1062,7 @@ def cmd_set_url(args):
     if args_file.exists() and not args.keep_args:
         args_file.unlink()
         ok("removed %s (its secret is no longer needed there; t3-args rewrites it)" % args_file.name)
-    print("Next: python3 -I %s --project %s --real" % (shlex.quote(str(SCRIPTS / "verify.py")), shlex.quote(str(ctx.root))))
+    print("Next: %s -I %s --project %s --real" % (PY, shell_quote(str(SCRIPTS / "verify.py")), shell_quote(str(ctx.root))))
     return 0
 
 
@@ -751,6 +1092,8 @@ def cmd_rotate(args):
                             "schedule": webhook_schedule(ctx, cfg["secret"])}}
     path = ctx.config_dir / "t3-rotate-secret.json"
     write_atomic(path, json.dumps(update, indent=1) + "\n", mode=0o600)
+    if WINDOWS:
+        make_private(path)
     ok("update_scheduled_task arguments: %s (private fallback; do not read it into context)" % path)
     print("""
 Now, in the orchestrator thread:
@@ -761,8 +1104,8 @@ Now, in the orchestrator thread:
      Add the returned secretRef to schedule.signature and call update_scheduled_task with that schedule.
 Messages sent in between are refused and stay queued; the server retries them every 3 minutes.
 Then run verify.py --real and delete %(path)s.""" % {
-        "title": ctx.s["title"], "config": shlex.quote(str(ctx.config)), "root": shlex.quote(str(ctx.root)),
-        "setup": shlex.quote(str(SCRIPTS / "setup.py")), "path": shlex.quote(str(path))})
+        "title": ctx.s["title"], "config": shell_quote(str(ctx.config)), "root": shell_quote(str(ctx.root)),
+        "setup": shell_quote(str(SCRIPTS / "setup.py")), "path": shell_quote(str(path))})
     return 0
 
 
@@ -786,7 +1129,7 @@ def cmd_change_port(args):
     if not port_free(args.port):
         fail("port %d is in use: %s" % (args.port, port_owner(args.port)))
     old = ctx.port
-    s = json.loads(sp.read_text())
+    s = json.loads(sp.read_text(encoding="utf-8"))
     s["port"] = args.port
     write_atomic(sp, json.dumps(s, indent=2) + "\n")
     ok("buildlog.json port %d" % args.port)
@@ -796,8 +1139,17 @@ def cmd_change_port(args):
         write_atomic(ctx.page, new)
         ok("page URLs updated (%d replaced)" % text.count("http://127.0.0.1:%d/" % old))
     ctx2, _ = load_ctx(args)
-    if ctx2.unit.exists():
-        systemctl("restart", "%s.service" % ctx2.service)
+    if ctx2.manager == "schtasks":
+        with open(ctx2.task_xml, "w", encoding="utf-16") as f:
+            f.write(task_xml(ctx2))
+        run(["schtasks", "/Create", "/TN", ctx2.service, "/XML", str(ctx2.task_xml), "/F"])
+        run(["schtasks", "/End", "/TN", ctx2.service])
+        ctx_old = Ctx(ctx2.root, dict(ctx2.s, port=old), {"config_home": str(ctx2.config_home),
+                                                          "state_home": str(ctx2.state_home)})
+        stop_own_server(ctx_old)
+    if WINDOWS and ctx2.start_script.exists():
+        write_start_script(ctx2)
+    if restart_server(ctx2):
         good, why = wait_for_server(args.port, ctx2.name)
         if not good:
             fail("service does not answer on %d (%s)" % (args.port, why))
@@ -835,10 +1187,7 @@ def cmd_upgrade_page(args):
     new_tasks = TASKS_RE.search(tpl).group(0)
     nb = css_block(tpl)
     new_css = tpl[nb[0]:nb[1]]
-    lock = os.open(str(ctx.page.parent), os.O_RDONLY)          # the same lock as the task CLI
-    try:
-        import fcntl
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with load_script("buildlog_tasks").Locked(ctx.page.parent):      # the same lock as the task CLI
         text = ctx.page.read_text(encoding="utf-8")
         if len(TASKS_RE.findall(text)) != 1:
             fail("the page needs exactly one TASKS START/END pair")
@@ -872,8 +1221,6 @@ def cmd_upgrade_page(args):
         backup = bdir / ("%s.%s" % (ctx.page.name, time.strftime("%Y%m%d-%H%M%S")))
         shutil.copy2(ctx.page, backup)
         write_atomic(ctx.page, out, mode=ctx.page.stat().st_mode & 0o777)
-    finally:
-        os.close(lock)
     ok("replaced the TASKS section; %s" % how)
     r = run([sys.executable, "-I", str(ctx.cli), "sync"])
     if r.returncode != 0:
@@ -886,9 +1233,17 @@ def cmd_upgrade_page(args):
 def cmd_status(args):
     ctx, _ = load_ctx(args)
     step("Status of %s" % ctx.name)
-    active = systemctl("is-active", "%s.service" % ctx.service).stdout.strip()
-    pid = systemctl("show", "-p", "MainPID", "--value", "%s.service" % ctx.service).stdout.strip()
-    print("  service   %s.service: %s (pid %s)" % (ctx.service, active or "unknown", pid or "-"))
+    if ctx.manager == "systemd":
+        active = systemctl("is-active", "%s.service" % ctx.service).stdout.strip()
+        pid = systemctl("show", "-p", "MainPID", "--value", "%s.service" % ctx.service).stdout.strip()
+        print("  service   %s.service: %s (pid %s)" % (ctx.service, active or "unknown", pid or "-"))
+    elif ctx.manager == "schtasks":
+        state = schtasks_state(ctx)
+        pid = port_pid(ctx.port)
+        print("  service   logon task %s: %s (pid %s, %s)" % (ctx.service, state or "NOT INSTALLED", pid or "-",
+              "our server" if is_own_server(ctx, pid) else "not our server" if pid else "nothing listening"))
+    else:
+        print("  service   none (started by hand: %s)" % (ctx.start_script.relative_to(ctx.root) if WINDOWS else ctx.server))
     print("  port      %d: %s" % (ctx.port, port_owner(ctx.port) or "nothing listening"))
     good, why = wait_for_server(ctx.port, ctx.name, seconds=1)
     print("  answers   %s" % ("yes, as %s" % ctx.name if good else "no (%s)" % why))
@@ -911,7 +1266,16 @@ def cmd_status(args):
 def cmd_remove(args):
     ctx, sp = load_ctx(args)
     step("Remove the build log system for %s" % ctx.name)
-    if shutil.which("systemctl"):
+    if ctx.manager == "schtasks":
+        run(["schtasks", "/End", "/TN", ctx.service])
+        r = run(["schtasks", "/Delete", "/TN", ctx.service, "/F"])
+        stop_own_server(ctx)
+        if ctx.task_xml.exists():
+            ctx.task_xml.unlink()
+        ok("logon task %s %s" % (ctx.service, "stopped and deleted" if r.returncode == 0 else "was not installed"))
+    elif ctx.manager == "none":
+        ok("server %s" % ("stopped" if stop_own_server(ctx) else "still running (stop it yourself)"))
+    elif shutil.which("systemctl"):
         systemctl("disable", "--now", "%s.service" % ctx.service)
         if ctx.unit.exists():
             ctx.unit.unlink()
@@ -931,7 +1295,7 @@ def cmd_remove(args):
         for rules_doc in ctx.s.get("rules_docs", []):
             doc = ctx.root / rules_doc
             if doc.is_file():
-                text = doc.read_text()
+                text = doc.read_text(encoding="utf-8")
                 if text.count(RULES_START) == text.count(RULES_END) == 1:
                     text = re.sub(r"\n*" + re.escape(RULES_START) + r".*?" + re.escape(RULES_END) + r"\n?", "\n",
                                   text, flags=re.S).strip("\n")
@@ -947,8 +1311,9 @@ def cmd_remove(args):
             elif p.exists():
                 p.unlink()
         gi = ctx.root / ".gitignore"
-        if gi.exists() and GUARD_START in gi.read_text():
-            text = re.sub(r"\n*" + re.escape(GUARD_START) + r".*?" + re.escape(GUARD_END) + r"\n?", "\n", gi.read_text(), flags=re.S)
+        if gi.exists() and GUARD_START in gi.read_text(encoding="utf-8"):
+            text = re.sub(r"\n*" + re.escape(GUARD_START) + r".*?" + re.escape(GUARD_END) + r"\n?", "\n",
+                          gi.read_text(encoding="utf-8"), flags=re.S)
             write_atomic(gi, text.lstrip("\n"))
         ok("removed %s, %s, %s and the .gitignore block (commit the removal yourself)" % (ctx.tools_rel, ctx.page_rel, ctx.tasks_rel))
     print("\nIn T3: list_scheduled_tasks, then delete_scheduled_task for \"%s: build log messages\" and "
@@ -972,7 +1337,10 @@ def main(argv=None):
     p.add_argument("--slug", help="short id for headers and secret folders (default: from the folder name)")
     p.add_argument("--name", help="state/config/User-Agent name (default: <slug>-buildlog)")
     p.add_argument("--port", type=int, help="port on 127.0.0.1 (default: a free one in 33650-33949)")
-    p.add_argument("--service", help="systemd user service name (default: the name)")
+    p.add_argument("--service", help="service (systemd unit or Windows task) name (default: the name)")
+    p.add_argument("--service-manager", choices=("auto",) + MANAGERS, default="auto",
+                   help="what keeps the server running: systemd (Linux default), schtasks (a Windows logon task, "
+                        "the Windows default) or none (init starts it once; see start-server.cmd on Windows)")
     p.add_argument("--page", help="default: existing page or docs/buildlog.html")
     p.add_argument("--tasks", help="task file (default: buildlog-tasks.json next to the page)")
     p.add_argument("--tools-dir", help="default: existing tools directory or tools/buildlog")
@@ -987,7 +1355,7 @@ def main(argv=None):
     p.add_argument("--evidence-dir", help="default: existing directory or docs/evidence")
     p.add_argument("--media-dir", help="default: existing directory or docs/buildlog-media")
     p.add_argument("--rules-doc", action="append", help="instruction entry point; repeat for several (default: AGENTS.md and CLAUDE.md)")
-    p.add_argument("--no-service", action="store_true", help="do not install the systemd user service")
+    p.add_argument("--no-service", action="store_true", help="do not install or start the service this time")
     p.add_argument("--commit", action="store_true", help="commit the new files through a private index")
     p.add_argument("--force", action="store_true", help="replace an existing page")
     p = common(sub.add_parser("set-url", help="store the webhook URL, read from stdin"))
@@ -1006,6 +1374,7 @@ def main(argv=None):
     p.add_argument("--purge", action="store_true", help="also delete ~/.config/<name> and ~/.local/state/<name>")
     p.add_argument("--files", action="store_true", help="also delete the project files (tools dir, page, task file)")
     args = ap.parse_args(argv)
+    utf8_stdio()
     return {"init": cmd_init, "set-url": cmd_set_url, "t3-args": cmd_t3_args, "rotate-secret": cmd_rotate,
             "delivery": cmd_delivery, "change-port": cmd_change_port, "status": cmd_status,
             "upgrade-page": cmd_upgrade_page,

@@ -23,7 +23,7 @@ writing, and replaces the file atomically. Running it again with unchanged
 status files changes nothing. Python standard library only.
 """
 import argparse
-import fcntl
+import hashlib
 import html
 import json
 import os
@@ -32,7 +32,14 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import unquote
+
+try:
+    import fcntl
+except ImportError:                          # Windows
+    fcntl = None
+    import msvcrt
 
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "buildlog.json"
@@ -313,7 +320,14 @@ def write_atomic(path, text):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        for i in range(40):                   # Windows: a reader may briefly hold the target open
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or i == 39:
+                    raise
+                time.sleep(0.05)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -327,11 +341,35 @@ def read_page(path):
         return f.read()
 
 
+def lock_dir(path):
+    """The same directory lock as buildlog_tasks.py (Locked). Returns a function that releases it."""
+    if fcntl:
+        fd = os.open(str(path), os.O_RDONLY)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    else:                                     # Windows: a lock file named after the folder, in the temp folder
+        key = hashlib.sha256(os.path.normcase(os.path.abspath(str(path))).encode("utf-8")).hexdigest()[:20]
+        fd = os.open(os.path.join(tempfile.gettempdir(), "buildlog-%s.lock" % key), os.O_RDWR | os.O_CREAT, 0o600)
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                break
+            except OSError:
+                continue
+
+    def release():
+        if fcntl:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        else:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        os.close(fd)
+    return release
+
+
 def write_page(page_path, repo, evidence):
     """Read, transform and replace the page in one quick step; retry if someone else wrote meanwhile."""
-    fd = os.open(str(page_path.parent), os.O_RDONLY)     # same lock as buildlog_tasks.py
+    release = lock_dir(page_path.parent)     # same lock as buildlog_tasks.py
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
         for _ in range(5):
             before = page_path.stat()
             text = read_page(page_path)
@@ -348,8 +386,7 @@ def write_page(page_path, repo, evidence):
             return result, True
         raise SystemExit("%s kept changing; nothing written" % page_path)
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        release()
 
 
 def main(argv=None):
@@ -361,6 +398,10 @@ def main(argv=None):
     ap.add_argument("--write", action="store_true", help="rewrite the bars in the CARDS section of the page")
     ap.add_argument("--no-git", action="store_true", help="check evidence files on disk instead of in git HEAD")
     args = ap.parse_args(argv)
+    if os.name == "nt":                       # Windows pipes default to the ANSI code page
+        for f in (sys.stdout, sys.stderr):
+            if f is not None and not f.isatty():
+                f.reconfigure(encoding="utf-8", errors="backslashreplace")
     s = load_settings(args.settings)
     repo = (args.repo or Path(s["root"])).resolve()
     page = (args.page or repo / s["page"]).resolve()

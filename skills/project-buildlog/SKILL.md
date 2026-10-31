@@ -5,7 +5,7 @@ description: Set up or maintain a project's live build log page with a "Your tas
 
 # Project buildlog
 
-A shared page connects the user to the orchestrator. Python scripts own tasks, work records, summaries and rendering. Use the same skill in Codex and Claude Code, including through T3 Code. Python 3.10+, Unix file locks; systemd is optional.
+A shared page connects the user to the orchestrator. Python scripts own tasks, work records, summaries and rendering. Use the same skill in Codex and Claude Code, including through T3 Code. Python 3.10+ on Linux, macOS or Windows (`python` there); systemd or a Windows logon task is optional.
 
 Start with `python3 -I /absolute/project/tools/buildlog/buildlog_agent.py brief`. It returns at most 2,400 characters of current work, blockers, user tasks and inbox counts. Use `--since REV` to skip unchanged state. Do not read the page, full history or script source for a routine status check.
 

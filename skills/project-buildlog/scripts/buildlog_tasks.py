@@ -40,7 +40,7 @@ forward them later either. Python standard library only.
 """
 import argparse
 import datetime
-import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -48,6 +48,13 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+
+try:
+    import fcntl
+except ImportError:                          # Windows
+    fcntl = None
+    import msvcrt
 
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "buildlog.json"
@@ -89,18 +96,29 @@ def write_atomic(path, text, mode=None):
         mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+
+
+def replace(src, dst):
+    """os.replace; on Windows retry while a reader (the server) briefly has the target open."""
+    for i in range(40):
+        try:
+            return os.replace(src, dst)
+        except PermissionError:
+            if os.name != "nt" or i == 39:
+                raise
+            time.sleep(0.05)
 
 
 def load(path):
@@ -145,20 +163,48 @@ def sync_page(data, page):
     return True
 
 
+def lock_file(path):
+    """Windows cannot open a directory for locking: lock a file named after it in the temp folder."""
+    key = hashlib.sha256(os.path.normcase(os.path.abspath(str(path))).encode("utf-8")).hexdigest()[:20]
+    return os.path.join(tempfile.gettempdir(), "buildlog-%s.lock" % key)
+
+
 class Locked:
-    """Exclusive lock on a directory, held across read-modify-write (the progress script takes it too)."""
+    """Exclusive lock on a directory, held across read-modify-write (the progress script and
+    setup.py upgrade-page take the same one)."""
 
     def __init__(self, path):
         self.path = path
 
     def __enter__(self):
-        self.fd = os.open(str(self.path), os.O_RDONLY)
-        fcntl.flock(self.fd, fcntl.LOCK_EX)
-        return self
+        if fcntl:
+            self.fd = os.open(str(self.path), os.O_RDONLY)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+            return self
+        self.fd = os.open(lock_file(self.path), os.O_RDWR | os.O_CREAT, 0o600)
+        while True:
+            try:
+                msvcrt.locking(self.fd, msvcrt.LK_LOCK, 1)    # retries for about 10 s, then raises
+                return self
+            except OSError:
+                continue
 
     def __exit__(self, *exc):
-        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        if fcntl:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+        else:
+            os.lseek(self.fd, 0, os.SEEK_SET)
+            msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
         os.close(self.fd)
+
+
+def utf8_stdio():
+    """Windows pipes default to the ANSI code page: use UTF-8 there, as on every other platform."""
+    if os.name != "nt":
+        return
+    for s in (sys.stdin, sys.stdout, sys.stderr):
+        if s is not None and hasattr(s, "reconfigure") and not s.isatty():
+            s.reconfigure(encoding="utf-8", errors="replace" if s is sys.stdin else "backslashreplace")
 
 
 def find(data, task_id):
@@ -171,7 +217,8 @@ def find(data, task_id):
 # ---- private-index commit ---------------------------------------------------
 
 def git(args, cwd, env=None, check=True):
-    r = subprocess.run(["git"] + args, cwd=str(cwd), env=env, capture_output=True, text=True)
+    r = subprocess.run(["git"] + args, cwd=str(cwd), env=env, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     if check and r.returncode != 0:
         raise RuntimeError("git %s: %s" % (args[0], (r.stderr or r.stdout).strip()))
     return r
@@ -317,7 +364,7 @@ def inbox_messages(state_dir):
     """Messages from inbox.jsonl with their status, oldest first."""
     msgs, order = {}, []
     try:
-        lines = (state_dir / "inbox.jsonl").read_text().splitlines()
+        lines = (state_dir / "inbox.jsonl").read_text(encoding="utf-8").splitlines()
     except OSError:
         lines = []
     for line in lines:
@@ -340,7 +387,7 @@ def inbox_messages(state_dir):
 
 def read_ids(state_dir):
     try:
-        data = json.loads((state_dir / "read.json").read_text())
+        data = json.loads((state_dir / "read.json").read_text(encoding="utf-8"))
         return [i for i in data.get("read", []) if isinstance(i, str)]
     except (OSError, ValueError, AttributeError):
         return []
@@ -425,6 +472,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.cmd == "inbox" and args.limit is not None and args.limit < 1:
         ap.error("--limit must be positive")
+    utf8_stdio()
 
     settings = load_settings(args.settings)
     if args.cmd == "inbox":

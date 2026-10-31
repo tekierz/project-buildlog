@@ -57,6 +57,8 @@ TASKS = {"tasks": [
 ]}
 
 
+
+
 def clean_env():
     return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
@@ -112,13 +114,13 @@ class Base(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self.root = self.tmp / "root"
         (self.root / "docs").mkdir(parents=True)
-        (self.root / PAGE).write_text("<!doctype html><title>x</title>hello page")
-        (self.root / "docs" / "notes.md").write_text("# notes\n")
-        (self.root / TASKS_REL).write_text(json.dumps(TASKS))
+        (self.root / PAGE).write_text("<!doctype html><title>x</title>hello page", encoding="utf-8", newline="\n")
+        (self.root / "docs" / "notes.md").write_text("# notes\n", encoding="utf-8", newline="\n")
+        (self.root / TASKS_REL).write_text(json.dumps(TASKS), encoding="utf-8", newline="\n")
         (self.root / ".git").mkdir()
-        (self.root / ".git" / "config").write_text("[core]\n")
+        (self.root / ".git" / "config").write_text("[core]\n", encoding="utf-8", newline="\n")
         self.outside = self.tmp / "outside-secret.txt"
-        self.outside.write_text("TOP-SECRET-OUTSIDE-ROOT")
+        self.outside.write_text("TOP-SECRET-OUTSIDE-ROOT", encoding="utf-8", newline="\n")
         os.symlink(self.outside, self.root / "link-out.txt")
         self.state = self.tmp / "state"
         self.config = self.tmp / "webhook.json"
@@ -130,12 +132,12 @@ class Base(unittest.TestCase):
     def write_config(self, url=None, secret=SECRET, **extra):
         cfg = {"url": self.hook.url if url is None else url, "secret": secret, "header": SIG_HEADER, "prefix": "sha256="}
         cfg.update(extra)
-        self.config.write_text(json.dumps(cfg))
+        self.config.write_text(json.dumps(cfg), encoding="utf-8", newline="\n")
 
-    def start(self, timeout=2):
+    def start(self, timeout=2, **app_kw):
         self.logs = io.StringIO()
         self.server = bs.make_server(self.root, self.state, self.config, port=0, log=self.logs, webhook_timeout=timeout,
-                                     page=PAGE, tasks=TASKS_REL, name=NAME, signature_header=SIG_HEADER)
+                                     page=PAGE, tasks=TASKS_REL, name=NAME, signature_header=SIG_HEADER, **app_kw)
         self.app = self.server.app
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
@@ -204,11 +206,11 @@ class Base(unittest.TestCase):
 
     def inbox(self):
         p = self.state / "inbox.jsonl"
-        return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
 
     def cli(self, *args, check=True):
         cmd = [sys.executable, "-I", str(TOOLS / "buildlog_tasks.py"), "--settings", str(self.tmp / "none.json")]
-        r = subprocess.run(cmd + list(args), capture_output=True, text=True, env=clean_env())
+        r = subprocess.run(cmd + list(args), capture_output=True, text=True, encoding="utf-8", env=clean_env())
         if check:
             self.assertEqual(r.returncode, 0, r.stderr)
         return r
@@ -236,9 +238,10 @@ class TaskTests(Base):
         self.assertEqual(self.task("alpha")["note"], "yes please")
         self.assertFalse(self.task("gamma")["done"])
         self.assertFalse(self.task("beta")["done"])
-        saved = json.loads((self.state / "state.json").read_text())
+        saved = json.loads((self.state / "state.json").read_text(encoding="utf-8"))
         self.assertEqual(saved["tasks"]["alpha"]["note"], "yes please")
-        self.assertEqual(oct((self.state / "state.json").stat().st_mode & 0o777), "0o600")
+        if os.name != "nt":                            # Windows has no file modes (the folder's access list applies)
+            self.assertEqual(oct((self.state / "state.json").stat().st_mode & 0o777), "0o600")
 
     def test_note_only_save_keeps_tick(self):
         self.post("/api/tasks/beta", {"done": True})
@@ -385,7 +388,7 @@ class StaticTests(Base):
     def test_root_redirects_to_the_page(self):
         s, hdrs, _ = self.request("GET", "/")
         self.assertEqual((s, hdrs["location"]), (302, "/" + PAGE))
-        (self.root / "index.html").write_text("index")
+        (self.root / "index.html").write_text("index", encoding="utf-8", newline="\n")
         self.assertEqual(self.request("GET", "/")[2], b"index")
 
     def test_path_traversal_refused(self):
@@ -554,7 +557,9 @@ class SendTests(Base):
         self.assertEqual((out["delivered"], out["error"]), (False, "webhook not configured"))
         self.write_config(url="http://127.0.0.1:1/never")
         out = self.send(note="dead port")
-        self.assertEqual((out["delivered"], out["error"]), (False, "connection failed"))
+        self.assertFalse(out["delivered"])
+        # Windows retries a refused localhost connect for about 2 s, so a short webhook timeout can win
+        self.assertIn(out["error"], ("connection failed", "timeout") if os.name == "nt" else ("connection failed",))
         self.assertEqual(out["pending"], 2)
         self.write_config(url="")                      # set-url not run yet
         self.assertEqual(self.send(note="empty url")["error"], "webhook not configured")
@@ -584,18 +589,18 @@ class SendTests(Base):
 
 
 class ReplyTests(Base):
-    """Orchestrator replies, the user's last note and the general thread."""
+    """Orchestrator replies, the user's last note and the general thread (same contract as recomp)."""
 
     def cli(self, *args, check=True):
         return subprocess.run([sys.executable, "-I", str(TOOLS / "buildlog_tasks.py"), "--settings", str(self.tmp / "none.json"),
                                "--file", str(self.root / TASKS_REL), "--page", str(self.tmp / "none.html")] + list(args),
-                              check=check, capture_output=True, text=True, env=clean_env())
+                              check=check, capture_output=True, text=True, encoding="utf-8", env=clean_env())
 
     def edit_tasks_file(self, fn):
         path = self.root / TASKS_REL
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         fn(data)
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8", newline="\n")
 
     def test_task_replies_are_served_oldest_first(self):
         self.assertEqual(self.task("alpha")["replies"], [])
@@ -610,7 +615,7 @@ class ReplyTests(Base):
     def test_reply_from_stdin(self):
         r = subprocess.run([sys.executable, "-I", str(TOOLS / "buildlog_tasks.py"), "--settings", str(self.tmp / "none.json"),
                             "--file", str(self.root / TASKS_REL), "--page", str(self.tmp / "none.html"), "reply", "beta", "-"],
-                           input="Rumble works.\n\n- left motor\n- right motor\n", capture_output=True, text=True, env=clean_env())
+                           input="Rumble works.\n\n- left motor\n- right motor\n", capture_output=True, text=True, encoding="utf-8", env=clean_env())
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.task("beta")["replies"][-1]["text"], "Rumble works.\n\n- left motor\n- right motor")
 
@@ -634,7 +639,7 @@ class ReplyTests(Base):
         self.assertTrue(after["done"])
         self.assertEqual((after["note"], after["updated"]), ("my draft", before["updated"]))
         self.assertEqual(len(after["replies"]), 1)
-        self.assertEqual(json.loads((self.state / "state.json").read_text())["tasks"]["alpha"]["note"], "my draft")
+        self.assertEqual(json.loads((self.state / "state.json").read_text(encoding="utf-8"))["tasks"]["alpha"]["note"], "my draft")
 
     def test_last_note_comes_from_the_inbox(self):
         self.assertIsNone(self.task("alpha")["last_note"])
@@ -740,7 +745,8 @@ class LocalInboxTests(Base):
         self.assertIn("(no unhandled messages)", self.inbox_cli().stdout)
         everything = json.loads(self.inbox_cli("--all", "--json").stdout)
         self.assertEqual([m["status"] for m in everything], ["read", "read"])
-        self.assertEqual(oct((self.state / "read.json").stat().st_mode & 0o777), "0o600")
+        if os.name != "nt":
+            self.assertEqual(oct((self.state / "read.json").stat().st_mode & 0o777), "0o600")
         self.restart()                                 # statuses survive a restart
         self.assertEqual([m["status"] for m in self.get_json("/api/messages")[1]["messages"]], ["local"])
         self.assertEqual(self.task("alpha")["last_note"]["status"], "local")
@@ -774,7 +780,7 @@ class SecretTests(Base):
         texts = list(self.transcript) + [self.logs.getvalue()]
         for p in self.state.rglob("*"):
             if p.is_file():
-                texts.append(p.read_text())
+                texts.append(p.read_text(encoding="utf-8"))
         needles = [SECRET, URL_TOKEN, URL_QUERY, self.hook.url, "sha256="]
         needles += [hmac.new(SECRET.encode(), r["body"], hashlib.sha256).hexdigest() for r in self.hook.received]
         found = []
@@ -827,18 +833,18 @@ class TasksCliTests(unittest.TestCase):
         self.tasks = d / "buildlog-tasks.json"
         self.page = d / "buildlog.html"
         self.page.write_text("<html><!-- TASKS-SNAPSHOT:START -->\n<script type=\"application/json\" id=\"tasks-snapshot\">{\"tasks\":[]}</script>\n"
-                             "<!-- TASKS-SNAPSHOT:END --><p>rest of page</p></html>")
+                             "<!-- TASKS-SNAPSHOT:END --><p>rest of page</p></html>", encoding="utf-8", newline="\n")
         self.none = d / "none.json"
 
     def run_cli(self, *args, check=True):
         r = subprocess.run([sys.executable, "-I", str(TOOLS / "buildlog_tasks.py"), "--settings", str(self.none),
-                            "--file", str(self.tasks)] + list(args), capture_output=True, text=True, env=clean_env())
+                            "--file", str(self.tasks)] + list(args), capture_output=True, text=True, encoding="utf-8", env=clean_env())
         if check:
             self.assertEqual(r.returncode, 0, r.stderr)
         return r
 
     def data(self):
-        return json.loads(self.tasks.read_text())["tasks"]
+        return json.loads(self.tasks.read_text(encoding="utf-8"))["tasks"]
 
     def test_add_list_done_reopen(self):
         out = self.run_cli("add", "--kind", "action", "--title", "Plug in the DualSense!", "--details", "USB first.", "--how", "ls -l")
@@ -868,7 +874,7 @@ class TasksCliTests(unittest.TestCase):
 
     def test_page_snapshot_follows_the_file(self):
         self.run_cli("add", "--kind", "decision", "--title", "Use </script> safely?", "--details", "a < b", "--id", "xss")
-        html = self.page.read_text()
+        html = self.page.read_text(encoding="utf-8")
         m = re.search(r'id="tasks-snapshot">(.*?)</script>', html, re.S)
         self.assertNotIn("</script", m.group(1))
         snap = json.loads(m.group(1))
@@ -876,7 +882,7 @@ class TasksCliTests(unittest.TestCase):
         self.assertEqual(snap["tasks"][0]["title"], "Use </script> safely?")
         self.assertIn("rest of page", html)
         self.run_cli("done", "xss")
-        self.assertEqual(json.loads(re.search(r'id="tasks-snapshot">(.*?)</script>', self.page.read_text(), re.S).group(1))["tasks"][0]["status"], "done")
+        self.assertEqual(json.loads(re.search(r'id="tasks-snapshot">(.*?)</script>', self.page.read_text(encoding="utf-8"), re.S).group(1))["tasks"][0]["status"], "done")
 
     def test_missing_file_starts_empty(self):
         self.assertIn("no open tasks", self.run_cli("list").stdout)
@@ -906,12 +912,12 @@ class TasksCliTests(unittest.TestCase):
         self.run_cli("add", "--kind", "action", "--title", "T", "--details", "d")
         self.run_cli("reply", "--general", "A general answer")
         self.run_cli("reply", "--general", "Another")
-        data = json.loads(self.tasks.read_text())
+        data = json.loads(self.tasks.read_text(encoding="utf-8"))
         self.assertEqual([r["text"] for r in data["general_replies"]], ["A general answer", "Another"])
         self.assertEqual(len(data["tasks"]), 1)
         self.assertNotIn("replies", data["tasks"][0])
         self.run_cli("add", "--kind", "action", "--title", "T2", "--details", "d")      # other keys survive edits
-        self.assertEqual(len(json.loads(self.tasks.read_text())["general_replies"]), 2)
+        self.assertEqual(len(json.loads(self.tasks.read_text(encoding="utf-8"))["general_replies"]), 2)
 
     def test_reply_errors(self):
         self.run_cli("add", "--kind", "action", "--title", "T", "--details", "d", "--id", "t")
@@ -922,20 +928,20 @@ class TasksCliTests(unittest.TestCase):
             r = self.run_cli(*args, check=False)
             self.assertNotEqual(r.returncode, 0, args)
         self.assertNotIn("replies", self.data()[0])
-        self.assertNotIn("general_replies", json.loads(self.tasks.read_text()))
+        self.assertNotIn("general_replies", json.loads(self.tasks.read_text(encoding="utf-8")))
 
     def test_snapshot_carries_replies(self):
         self.run_cli("add", "--kind", "action", "--title", "T", "--details", "d", "--id", "t")
         self.run_cli("reply", "t", "Done </script><b> & more")
         self.run_cli("reply", "--general", "General <i>answer</i>")
-        html = self.page.read_text()
+        html = self.page.read_text(encoding="utf-8")
         m = re.search(r'id="tasks-snapshot">(.*?)</script>', html, re.S)
         self.assertNotIn("</script", m.group(1))
         snap = json.loads(m.group(1))
         self.assertEqual(snap["tasks"][0]["replies"][0]["text"], "Done </script><b> & more")
         self.assertEqual(snap["general_replies"][0]["text"], "General <i>answer</i>")
         self.assertEqual(sorted(snap["tasks"][0]["replies"][0]), ["at", "text"])
-        self.assertEqual(snap, json.loads(bt.snapshot_json(json.loads(self.tasks.read_text()))))
+        self.assertEqual(snap, json.loads(bt.snapshot_json(json.loads(self.tasks.read_text(encoding="utf-8")))))
 
 
 @unittest.skipUnless(shutil.which("git"), "git not installed")
@@ -955,18 +961,18 @@ class CommitTests(unittest.TestCase):
         self.tasks = self.repo / TASKS_REL
         self.page = self.repo / PAGE
         self.page.write_text("<html><!-- TASKS-SNAPSHOT:START -->\n<script type=\"application/json\" id=\"tasks-snapshot\">{\"tasks\":[]}</script>\n"
-                             "<!-- TASKS-SNAPSHOT:END --></html>\n")
-        (self.repo / "other.txt").write_text("v1\n")
+                             "<!-- TASKS-SNAPSHOT:END --></html>\n", encoding="utf-8", newline="\n")
+        (self.repo / "other.txt").write_text("v1\n", encoding="utf-8", newline="\n")
         self.settings = self.repo / "buildlog.json"
-        self.settings.write_text(json.dumps({"root": ".", "page": PAGE, "tasks": TASKS_REL}))
+        self.settings.write_text(json.dumps({"root": ".", "page": PAGE, "tasks": TASKS_REL}), encoding="utf-8", newline="\n")
 
     def git(self, *args):
-        return subprocess.run(["git", "-C", str(self.repo)] + list(args), capture_output=True, text=True,
+        return subprocess.run(["git", "-C", str(self.repo)] + list(args), capture_output=True, text=True, encoding="utf-8",
                               env=self.env, check=True).stdout
 
     def cli(self, *args):
         r = subprocess.run([sys.executable, "-I", str(TOOLS / "buildlog_tasks.py"), "--settings", str(self.settings)] + list(args),
-                           capture_output=True, text=True, env=self.env)
+                           capture_output=True, text=True, encoding="utf-8", env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r
 
@@ -978,7 +984,7 @@ class CommitTests(unittest.TestCase):
     def test_only_task_paths_are_committed_and_shared_index_stays_right(self):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "base")
-        (self.repo / "other.txt").write_text("v2, staged by someone else\n")
+        (self.repo / "other.txt").write_text("v2, staged by someone else\n", encoding="utf-8", newline="\n")
         self.git("add", "other.txt")                       # another thread's staged work
         self.cli("add", "--kind", "decision", "--title", "Ship it?", "--details", "d", "--commit")
         msg = self.git("log", "-1", "--format=%B").strip()
@@ -1006,11 +1012,11 @@ class CommitTests(unittest.TestCase):
     def test_directory_commits_keep_the_shared_index_in_step(self):
         tools = self.repo / "tools"
         tools.mkdir()
-        (tools / "a.py").write_text("1\n")
-        (tools / "b.py").write_text("1\n")
+        (tools / "a.py").write_text("1\n", encoding="utf-8", newline="\n")
+        (tools / "b.py").write_text("1\n", encoding="utf-8", newline="\n")
         self.cli("commit", "-m", "tools: first", "tools")
         self.assertEqual(self.git("status", "--porcelain").split("\n")[0][:2], "??")   # only untracked leftovers
-        (tools / "a.py").write_text("2\n")
+        (tools / "a.py").write_text("2\n", encoding="utf-8", newline="\n")
         self.cli("commit", "-m", "tools: second", "tools")          # a directory path, second time
         self.assertEqual(self.git("status", "--porcelain", "--", "tools").strip(), "")
         self.assertEqual(self.git("show", "--name-only", "--format=", "HEAD").split(), ["tools/a.py"])
@@ -1027,15 +1033,15 @@ class CommitTests(unittest.TestCase):
     def test_commit_subcommand(self):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "base")
-        self.page.write_text(self.page.read_text() + "<p>update</p>\n")
-        (self.repo / "other.txt").write_text("unrelated edit\n")
+        self.page.write_text(self.page.read_text(encoding="utf-8") + "<p>update</p>\n", encoding="utf-8", newline="\n")
+        (self.repo / "other.txt").write_text("unrelated edit\n", encoding="utf-8", newline="\n")
         out = self.cli("commit", "-m", "buildlog: update", PAGE).stdout
         self.assertIn("committed", out)
         self.assertEqual(self.git("show", "--name-only", "--format=", "HEAD").split(), [PAGE])
         self.assertIn("other.txt", self.git("status", "--porcelain"))
         self.assertIn("nothing to commit", subprocess.run(
             [sys.executable, "-I", str(TOOLS / "buildlog_tasks.py"), "--settings", str(self.settings), "commit", "-m", "x", PAGE],
-            capture_output=True, text=True, env=self.env).stderr)
+            capture_output=True, text=True, encoding="utf-8", env=self.env).stderr)
 
 
 SETTINGS = TOOLS / "buildlog.json"
@@ -1047,13 +1053,13 @@ class ProjectFilesTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.s = json.loads(SETTINGS.read_text())
+        cls.s = json.loads(SETTINGS.read_text(encoding="utf-8"))
         cls.root = (TOOLS / cls.s.get("root", "../..")).resolve()
         cls.page = cls.root / cls.s["page"]
         cls.tasks = cls.root / cls.s["tasks"]
 
     def test_tasks_file_is_valid(self):
-        data = json.loads(self.tasks.read_text())
+        data = json.loads(self.tasks.read_text(encoding="utf-8"))
         ids = [t["id"] for t in data["tasks"]]
         self.assertEqual(len(ids), len(set(ids)))
         for t in data["tasks"]:
@@ -1067,7 +1073,7 @@ class ProjectFilesTests(unittest.TestCase):
 
     def test_page_markers_snapshot_and_no_meta_refresh(self):
         html = self.page.read_text(encoding="utf-8")
-        data = json.loads(self.tasks.read_text())
+        data = json.loads(self.tasks.read_text(encoding="utf-8"))
         for marker in ("<!-- TASKS:START -->", "<!-- TASKS:END -->", "<!-- TASKS-SNAPSHOT:START -->",
                        "<!-- TASKS-SNAPSHOT:END -->", "<!-- UPDATED:START -->", "<!-- UPDATED:END -->"):
             self.assertEqual(html.count(marker), 1, marker)
@@ -1089,7 +1095,7 @@ class ProjectFilesTests(unittest.TestCase):
         homes = self.s.get("_homes") or {}
         cfg_path = Path(homes.get("config_home") or Path.home() / ".config") / self.s["name"] / "webhook.json"
         try:
-            cfg = json.loads(cfg_path.read_text())
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             cfg = {}
         needles = [v for v in (cfg.get("secret"), cfg.get("url")) if v]

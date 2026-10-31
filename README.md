@@ -11,7 +11,7 @@ A shared buildlog for Codex and Claude Code, including through T3 Code. The page
 - A status brief capped at 2,400 characters by default. Revision checks skip unchanged state; details load on demand.
 - Saved dark, light, system and high contrast themes, cards/compact views, and a color-blind palette. Display changes need no agent call.
 - Optional startup hook adapters and signed T3 webhook feedback. Local inbox delivery works without T3.
-- A loopback-only server, retry queue, private credential storage and optional systemd user service.
+- A loopback-only server, retry queue, private credential storage and an optional systemd user service (Linux) or logon Scheduled Task (Windows).
 
 Python standard library only. No package dependencies or model API calls.
 
@@ -48,7 +48,7 @@ python3 -I skills/project-buildlog/scripts/setup.py init --project /path/to/repo
 
 Init writes compact entries to both `AGENTS.md` and `CLAUDE.md`, with shared rules beside the page. Repeat `--rules-doc PATH` to choose entry points. It preserves existing instruction text and does not commit unless `--commit` is supplied.
 
-Requirements: Python 3.10+, Unix file locks, and git for commits/evidence. Linux systemd user services keep the server running; otherwise use `--no-service` and start the copied server yourself. T3 webhook delivery requires remote access. Use `--delivery local` for a local inbox without T3.
+Requirements: Python 3.10+ on Linux, macOS or Windows, and git for commits/evidence. A systemd user service (Linux) or a per-user logon Scheduled Task (Windows, `--service-manager schtasks`, the default there) keeps the server running; otherwise use `--service-manager none` or `--no-service` and start the copied server yourself. On Windows run the scripts with `python` instead of `python3`. T3 webhook delivery requires remote access. Use `--delivery local` for a local inbox without T3.
 
 The [setup guide](skills/project-buildlog/references/setup.md) covers private webhook entry, verification, upgrades and removal. Recurring heartbeats are optional and created only when requested. Hooks supplement delivery; they cannot wake an idle agent, and hook execution in T3 still needs a live provider check.
 

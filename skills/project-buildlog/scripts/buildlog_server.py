@@ -27,6 +27,7 @@ is forwarded: messages wait in the inbox for `buildlog_tasks.py inbox`.
 Python standard library only. Run it with: python3 -I buildlog_server.py
 """
 import argparse
+import base64
 import collections
 import datetime
 import hashlib
@@ -42,6 +43,7 @@ import socketserver
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -122,7 +124,14 @@ def write_atomic(path, data, mode=0o600):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        for i in range(40):                   # Windows: a reader may briefly hold the target open
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or i == 39:
+                    raise
+                time.sleep(0.05)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -199,7 +208,7 @@ class BuildlogApp:
 
     def _read_config_file(self):
         try:
-            cfg = json.loads(self.config_path.read_text())
+            cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
         return cfg if isinstance(cfg, dict) else {}
@@ -236,7 +245,7 @@ class BuildlogApp:
 
     def _load_state(self):
         try:
-            data = json.loads(self.state_path.read_text())
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
             if isinstance(data, dict) and isinstance(data.get("tasks"), dict):
                 return data
         except (OSError, ValueError):
@@ -248,7 +257,7 @@ class BuildlogApp:
 
     def _append_inbox(self, record):
         line = json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
-        fd = os.open(self.inbox_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        fd = os.open(self.inbox_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
         try:
             os.write(fd, line.encode())
             os.fsync(fd)
@@ -257,7 +266,7 @@ class BuildlogApp:
 
     def _load_inbox(self):
         try:
-            lines = self.inbox_path.read_text().splitlines()
+            lines = self.inbox_path.read_text(encoding="utf-8").splitlines()
         except OSError:
             return
         for line in lines:
@@ -281,7 +290,7 @@ class BuildlogApp:
     def _read_ids(self):
         """Message ids an agent already handled from the local inbox (buildlog_tasks.py inbox --mark-read)."""
         try:
-            data = json.loads(self.read_path.read_text())
+            data = json.loads(self.read_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return set()
         ids = data.get("read") if isinstance(data, dict) else None
@@ -292,7 +301,7 @@ class BuildlogApp:
     def _read_tasks_data(self):
         path = self.root / self.tasks_rel
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {"tasks": []}
         except (OSError, ValueError):
@@ -558,6 +567,8 @@ class BuildlogApp:
             raise ApiError(403, "path traversal refused")
         if any(s.startswith(".") for s in segs):
             raise ApiError(404, "not found")
+        if os.name == "nt" and any(":" in s or s != s.rstrip(" .") for s in segs):
+            raise ApiError(404, "not found")       # drive letters, NTFS streams, names Windows trims
         target = self.root.joinpath(*segs)
         try:
             real = target.resolve()
@@ -632,17 +643,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if origin is not None and origin not in self.app.allowed_origins:
             raise ApiError(403, "bad origin")
 
-    def _read_json(self):
+    def _read_json(self, limit=MAX_BODY):
         try:
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
             raise ApiError(411, "content length required")
         if length < 0:
             raise ApiError(400, "bad content length")
-        if length > MAX_BODY:
+        if length > limit:
+            self._body_read = True
             self.rfile.read(min(length, 1 << 20))   # drain, so the client can read the answer
             raise ApiError(413, "body too large")
         try:
+            self._body_read = True
             body = json.loads(self.rfile.read(length) or b"null")
         except ValueError:
             raise ApiError(400, "body is not valid JSON")
@@ -650,11 +663,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise ApiError(400, "body must be a JSON object")
         return body
 
+    def _drain(self):
+        """Read a request body that was refused unread (CSRF, host, unknown path, method) before answering.
+        Closing a socket with unread data resets the connection on Windows, and the client then
+        sees a connection error instead of the 403."""
+        if self.command in ("GET", "HEAD") or getattr(self, "_body_read", False):
+            return
+        self._body_read = True
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            return
+        if 0 < length <= 1 << 20:
+            self.rfile.read(length)
+
     def _guard(self, fn):
+        self._body_read = False
         try:
             self._check_host()
             fn()
         except ApiError as e:
+            try:
+                self._drain()
+            except OSError:
+                pass
             self._json(e.status, {"error": e.message})
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -676,7 +708,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._guard(self._post)
 
     def _method_not_allowed(self):
-        self._guard(lambda: self._json(405, {"error": "method not allowed"}, [("Allow", "GET, HEAD, POST")]))
+        def refuse():
+            self._drain()
+            self._json(405, {"error": "method not allowed"}, [("Allow", "GET, HEAD, POST")])
+        self._guard(refuse)
 
     # No CORS preflight is answered: OPTIONS gets a plain 405 without CORS headers.
     do_OPTIONS = do_PUT = do_DELETE = do_PATCH = _method_not_allowed
@@ -757,7 +792,14 @@ def main(argv=None):
     homes = s.get("_homes") or {}             # only set by the skill's own tests
     state_dir = args.state_dir or str(Path(homes.get("state_home") or Path.home() / ".local/state") / s["name"])
     config = args.config or str(Path(homes.get("config_home") or Path.home() / ".config") / s["name"] / "webhook.json")
-    server = make_server(root, state_dir, config, port, page=s["page"], tasks=s["tasks"], name=s["name"],
+    log = None
+    if sys.stderr is None:                    # pythonw (the Windows logon task): log to a file in the state folder
+        Path(state_dir).mkdir(parents=True, exist_ok=True)
+        log_path = Path(state_dir) / "server.log"
+        if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
+            os.replace(str(log_path), str(log_path) + ".1")
+        log = sys.stderr = sys.stdout = open(log_path, "a", encoding="utf-8", buffering=1)
+    server = make_server(root, state_dir, config, port, log=log, page=s["page"], tasks=s["tasks"], name=s["name"],
                          signature_header=s["signature_header"])
     app = server.app
     stop = threading.Event()
